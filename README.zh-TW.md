@@ -109,11 +109,14 @@ frontmatter 的 `symptoms:` 陣列是**搜尋索引** — 那是 `fixindex find`
 
 ## 給 LLM coding agent 用
 
-如果你用 Claude Code 或同類 agent，把這段加到你的全域指令（`CLAUDE.md`、`GEMINI.md`、`AGENTS.md`）：
+目標：**agent 自動跑 `fixindex`，你不用手敲 CLI**。
 
-> 動手 debug 前，先跑 `fixindex find "<症狀關鍵字>"`。命中就讀那個 fix 檔再開始改 code。
->
-> 修完新 bug 之後，append `## §N` 區段到對應子檔，並把症狀字串加到 frontmatter `symptoms:` 陣列。全新 domain 就跑 `fixindex new <slug>`。
+完整自然語言 dispatch 表見 [`docs/agent-integration.md`](./docs/agent-integration.md)（內文為英文，方便直接 paste 進 agent 全域指令）：
+
+- **Mode A — 明確口令 `Fixindex <問題>`**：agent 依語意自選 `find / show / grep / new / supersede / list`。
+- **Mode B — 隱性 NL 觸發**：使用者提到系統名 + 症狀、用故障動詞（「壞了 / 沒回 / 卡住 / timing out」）、貼 error log → agent 在開始探索**之前**先跑 `fixindex find`。使用者說「修好了 / 記一下 / 加到日誌」→ 自動 append `## §N` 區段。
+
+該文件底部有一段可直接複製進 agent `CLAUDE.md` / `GEMINI.md` / `AGENTS.md` 的 snippet。
 
 把「我從頭探索一遍 repo」變成「我先翻 runbook」 — 同一個解法不會讓 agent 每個月重新推一次。
 

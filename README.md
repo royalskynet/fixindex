@@ -109,11 +109,14 @@ Environment overrides: `FIXINDEX_DIR`, `FIXINDEX_INDEX`, `RG`.
 
 ## Using fixindex with an LLM coding agent
 
-If you use Claude Code or a similar agent, add this to your global instructions (`CLAUDE.md`, `GEMINI.md`, `AGENTS.md`):
+If you use Claude Code or a similar agent, the goal is **the agent runs `fixindex` automatically — you never type the CLI by hand**.
 
-> Before debugging any failure, run `fixindex find "<symptom keyword>"`. If it returns a match, read that fix file before writing or editing code.
->
-> After you solve a new bug, append a `## §N` block to the matching fix file and add the symptom string to its frontmatter `symptoms:` array. For an entirely new domain, run `fixindex new <slug>`.
+See [`docs/agent-integration.md`](./docs/agent-integration.md) for the full natural-language dispatch table:
+
+- **Mode A — explicit keyword `Fixindex <question>`**: agent picks `find / show / grep / new / supersede / list` from your intent.
+- **Mode B — implicit NL triggers**: any system name + symptom, failure verb ("broken / silent / timing out"), or pasted error/log autoruns `fixindex find` *before* the agent starts exploring. Any "fixed it / log this / remember this" autoappends a `## §N` block.
+
+A drop-in snippet for your agent's global instructions is at the bottom of that doc.
 
 This converts "let me explore the repo from scratch" into "let me check the runbook first" — and stops the agent from re-deriving the same fix month after month.
 
