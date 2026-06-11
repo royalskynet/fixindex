@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# fixindex — feather-level adr-tools clone for FIX-INDEX system
+# Usage: fixindex {find|grep|show|new|re-index|supersede|help} ...
+
+set -euo pipefail
+
+# Defaults look in the current working directory. Override with env vars
+# (FIXINDEX_DIR / FIXINDEX_INDEX) to point at your own runbook checkout.
+FIXDIR="${FIXINDEX_DIR:-$PWD/fixes}"
+INDEX_FILE="${FIXINDEX_INDEX:-$PWD/FIX-INDEX.md}"
+RG="${RG:-rg}"
+
+die() { echo "fixindex: $*" >&2; exit 1; }
+
+[[ -d "$FIXDIR" ]] || die "fixes dir missing: $FIXDIR"
+
+cmd_help() {
+  cat <<'EOF'
+fixindex — symptom→fix lookup for personal bug runbook
+
+Commands:
+  fixindex find <keyword>       ripgrep frontmatter `symptoms:` + section titles
+  fixindex grep <keyword>       full-text ripgrep across fix files
+  fixindex show <id>            cat fixes/NNNN-*.md
+  fixindex list                 list all fix files with title
+  fixindex new <slug>           scaffold next-numbered fix file
+  fixindex re-index             regenerate FIX-INDEX.md directory table
+  fixindex supersede <old> <new>  mark old superseded by new
+  fixindex help                 this message
+
+Env:
+  FIXINDEX_DIR    override fixes/ dir (default: ./fixes)
+  FIXINDEX_INDEX  override FIX-INDEX.md path (default: ./FIX-INDEX.md)
+  RG              ripgrep binary (default: rg)
+EOF
+}
+
+# Resolve "0007" or "7" → fixes/0007-*.md
+resolve_id() {
+  local id="$1"
+  printf -v id "%04d" "$((10#$id))"
+  local f
+  f=$(find "$FIXDIR" -maxdepth 1 -name "${id}-*.md" | head -1)
+  [[ -n "$f" ]] || die "no fix with id $id"
+  echo "$f"
+}
+
+cmd_show() {
+  [[ $# -ge 1 ]] || die "usage: fixindex show <id>"
+  cat "$(resolve_id "$1")"
+}
+
+cmd_list() {
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+    local base id slug title
+    base=$(basename "$f" .md)
+    id="${base%%-*}"
+    slug="${base#*-}"
+    title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$f")
+    printf "%s  %-32s  %s\n" "$id" "$slug" "$title"
+  done
+}
+
+cmd_find() {
+  [[ $# -ge 1 ]] || die "usage: fixindex find <keyword>"
+  local kw="$1"
+  # Hit 1: frontmatter symptoms array entries
+  echo "## symptoms match:"
+  $RG -i --no-heading --line-number -F "$kw" "$FIXDIR"/[0-9]*.md 2>/dev/null \
+    | awk -F: -v kw="$kw" '
+      BEGIN { IGNORECASE=1 }
+      {
+        f=$1; ln=$2; rest=substr($0, length($1)+length($2)+3)
+        # only show lines that look like symptoms entries or section headers
+        if (rest ~ /^[[:space:]]*-[[:space:]]*"/ || rest ~ /^##[[:space:]]*§/) {
+          n=split(f, a, "/"); base=a[n]; sub(/\.md$/,"",base)
+          printf "  %-30s  L%-4s  %s\n", base, ln, rest
+        }
+      }' | head -40
+  echo ""
+  echo "(use \`fixindex grep '$kw'\` for full-text search)"
+}
+
+cmd_grep() {
+  [[ $# -ge 1 ]] || die "usage: fixindex grep <keyword>"
+  $RG -i --heading --line-number -F "$1" "$FIXDIR"/[0-9]*.md
+}
+
+next_id() {
+  local max=0 base id
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+    base=$(basename "$f")
+    id="${base%%-*}"
+    (( 10#$id > max )) && max=$((10#$id))
+  done
+  printf "%04d" "$((max+1))"
+}
+
+cmd_new() {
+  [[ $# -ge 1 ]] || die "usage: fixindex new <slug>"
+  local slug="$1" id newfile
+  id=$(next_id)
+  newfile="$FIXDIR/${id}-${slug}.md"
+  [[ -e "$newfile" ]] && die "exists: $newfile"
+  cat > "$newfile" <<EOF
+---
+id: $id
+slug: $slug
+title: TODO
+tags: []
+symptoms: []
+status: active
+supersedes: []
+related: []
+---
+# ${id} ${slug}
+
+## §1 TODO 標題
+**Symptom:** \`error msg\`
+**Root cause:** TODO
+**Fix:** TODO
+**Verify:** TODO
+EOF
+  echo "$newfile"
+  cmd_re_index
+}
+
+cmd_re_index() {
+  local tmp tbl
+  tmp=$(mktemp)
+  tbl=$(mktemp)
+  {
+    echo "| ID | Slug | Title | Tags |"
+    echo "|----|------|-------|------|"
+    for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+      [[ -e "$f" ]] || continue
+      local base id slug title tags status
+      base=$(basename "$f" .md)
+      id="${base%%-*}"
+      slug="${base#*-}"
+      title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$f")
+      tags=$(awk '/^tags:/ {sub(/^tags:[[:space:]]*/,""); gsub(/[\[\]]/,""); print; exit}' "$f")
+      status=$(awk '/^status:/ {sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
+      [[ "$status" == "superseded" ]] && id="~~$id~~"
+      printf "| %s | %s | %s | %s |\n" "$id" "$slug" "${title:-TODO}" "${tags:-}"
+    done
+  } > "$tbl"
+
+  awk -v tbl="$tbl" '
+    BEGIN { in_block=0 }
+    /<!-- fixindex:table:start -->/ {
+      print; while ((getline line < tbl) > 0) print line; close(tbl); in_block=1; next
+    }
+    /<!-- fixindex:table:end -->/ { print; in_block=0; next }
+    !in_block { print }
+  ' "$INDEX_FILE" > "$tmp"
+  mv "$tmp" "$INDEX_FILE"
+  rm -f "$tbl"
+  echo "re-indexed: $INDEX_FILE"
+}
+
+cmd_supersede() {
+  [[ $# -eq 2 ]] || die "usage: fixindex supersede <old_id> <new_id>"
+  local old_f new_f
+  old_f=$(resolve_id "$1")
+  new_f=$(resolve_id "$2")
+  # mark old as superseded (only touch frontmatter status line)
+  sed -i.bak -E "s/^status:[[:space:]]*.*/status: superseded/" "$old_f"
+  rm -f "${old_f}.bak"
+  # append supersedes ref to new file frontmatter if not present
+  awk -v old_id="$(basename "$old_f" | cut -d- -f1)" '
+    /^supersedes:/ && !done { sub(/\[\]/, "[" old_id "]"); done=1 }
+    { print }
+  ' "$new_f" > "${new_f}.tmp" && mv "${new_f}.tmp" "$new_f"
+  cmd_re_index
+}
+
+main() {
+  local sub="${1:-help}"
+  shift || true
+  case "$sub" in
+    find)        cmd_find "$@" ;;
+    grep)        cmd_grep "$@" ;;
+    show)        cmd_show "$@" ;;
+    list)        cmd_list ;;
+    new)         cmd_new "$@" ;;
+    re-index)    cmd_re_index ;;
+    supersede)   cmd_supersede "$@" ;;
+    help|-h|--help) cmd_help ;;
+    *) die "unknown command: $sub (try 'fixindex help')" ;;
+  esac
+}
+
+main "$@"
