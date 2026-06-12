@@ -21,9 +21,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 <!-- fixindex:table:start -->
 | ID | Slug | Title | Tags |
 |----|------|-------|------|
-| 0001 | deploy-pipeline | Deploy pipeline / CI runner / artifact upload | ci,deploy,docker,github-actions |
-| 0002 | postgres-migrations | PostgreSQL migrations / locking / connection pool | postgres,migrations,locking,connection-pool |
-| 0003 | tls-and-tunnels | TLS / reverse proxy / tunnel webhook drift | tls,nginx,cloudflare,tunnel,webhook |
+| 0001 | lark-meeting-notes | lark-meeting-notes / audio-meeting-notes 摘要與 LLM 卡住 | lark, meeting-notes, llm, spawnSync |
 <!-- fixindex:table:end -->
 
 ## Adding entries
