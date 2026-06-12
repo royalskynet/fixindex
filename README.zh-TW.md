@@ -88,9 +88,10 @@ related: []
 **Root cause:** …
 **Fix:** …
 **Verify:** …
+**Retrospective:** （選填）為什麼舊解法沒擋住？沒教訓就跳過。
 ```
 
-frontmatter 的 `symptoms:` 陣列是**搜尋索引** — 那是 `fixindex find` 真正在掃的東西。把它當成「將來你會在 shell 直接打進去的錯誤訊息字串清單」。`## §N` 內文是給人讀的 runbook。
+frontmatter 的 `symptoms:` 陣列是**搜尋索引** — 那是 `fixindex find` 真正在掃的東西。把它當成「將來你會在 shell 直接打進去的錯誤訊息字串清單」。`## §N` 內文是給人讀的 runbook。**Retrospective** 一行借自 Trellis 的 debug-retrospective 步驟 — 只在 bug 復發或之前該擋而沒擋下時記。
 
 ## 命令一覽
 
@@ -110,6 +111,8 @@ frontmatter 的 `symptoms:` 陣列是**搜尋索引** — 那是 `fixindex find`
 ## 給 LLM coding agent 用
 
 目標：**agent 自動跑 `fixindex`，你不用手敲 CLI**。
+
+**多平台一鍵 snippet** 在 [`agent-snippets/`](./agent-snippets/) — 挑你工具對應的檔（Claude / Codex / Cursor / Gemini / opencode / 通用），`cat … >> <規則檔>` 就裝完。借自 Trellis 多平台 config 排版。
 
 完整自然語言 dispatch 表見 [`docs/agent-integration.md`](./docs/agent-integration.md)（內文為英文，方便直接 paste 進 agent 全域指令）：
 

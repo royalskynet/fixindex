@@ -21,6 +21,7 @@ related: []
 **Root cause:** `cloudflared tunnel --url …` returns a fresh `*.trycloudflare.com` hostname on every restart; the receiver still points at the old one
 **Fix:** Either provision a named tunnel (`cloudflared tunnel create`) with a stable DNS record, or add a post-start hook that PUTs the new URL to the receiver's webhook endpoint API
 **Verify:** Restart tunnel, run `curl -s $RECEIVER_API/webhook/endpoint` and confirm the URL matches `cloudflared`'s announced one
+**Retrospective:** Quick tunnels were treated as "good enough for prod" because they worked at first; named tunnels were postponed as ops work. The recurrence cost more hours than the migration would have. Rule: if a tunnel survives one outage round-trip, schedule the named-tunnel promotion the same week.
 
 ## §2 Self-signed cert in dev rejected by Go HTTP client
 **Symptom:** `x509: certificate signed by unknown authority` from a service-to-service call in staging

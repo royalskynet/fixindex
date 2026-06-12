@@ -26,6 +26,7 @@ ALTER TABLE users ADD COLUMN trial_ends_at TIMESTAMPTZ;
 ```
 Then identify the blocker: `SELECT pid, query, state, xact_start FROM pg_stat_activity WHERE state != 'idle' ORDER BY xact_start;`
 **Verify:** Migration completes; `pg_locks` view shows no `AccessExclusiveLock` left over
+**Retrospective:** Past migrations also blocked silently — we relied on "it ran fine in staging" without checking staging had no long-running readers. Add a CI gate that runs every migration against a workload-replayed staging clone before merging.
 
 ## §2 Connection pool exhausted under load test
 **Symptom:** `FATAL: sorry, too many clients already` from the API during traffic spike

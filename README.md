@@ -88,9 +88,10 @@ related: []
 **Root cause:** …
 **Fix:** …
 **Verify:** …
+**Retrospective:** (optional) Why didn't a prior fix catch this? Skip when there is no lesson.
 ```
 
-The frontmatter `symptoms:` array is the **search index** — it's what `fixindex find` scans for. Treat it as a list of error-message strings you'd type into your shell. The body of each `## §N` block is the human-readable runbook.
+The frontmatter `symptoms:` array is the **search index** — it's what `fixindex find` scans for. Treat it as a list of error-message strings you'd type into your shell. The body of each `## §N` block is the human-readable runbook. The **Retrospective** row is borrowed from Trellis's debug-retrospective step — record it only when the bug recurred or a prior fix should have caught it.
 
 ## Commands
 
@@ -110,6 +111,8 @@ Environment overrides: `FIXINDEX_DIR`, `FIXINDEX_INDEX`, `RG`.
 ## Using fixindex with an LLM coding agent
 
 If you use Claude Code or a similar agent, the goal is **the agent runs `fixindex` automatically — you never type the CLI by hand**.
+
+**Drop-in snippets** per platform live in [`agent-snippets/`](./agent-snippets/) — pick the file for your tool (Claude / Codex / Cursor / Gemini / opencode / generic) and `cat … >> <your-rules-file>`. Pattern borrowed from Trellis's multi-platform config layout.
 
 See [`docs/agent-integration.md`](./docs/agent-integration.md) for the full natural-language dispatch table:
 

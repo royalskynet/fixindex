@@ -39,3 +39,4 @@ related: []
 **Root cause:** Glob pattern matched zero files because previous step `cd build/` changed cwd and the upload step used a relative path resolved from the wrong dir
 **Fix:** Use absolute paths in upload `path:` field, or set `working-directory` explicitly on the upload step
 **Verify:** Re-run, download artifact, `unzip -l` shows expected files
+**Retrospective:** The action exits 0 on zero matches — that silent-success is the trap. Future workflows should add a post-upload `gh run download` smoke check, or fail-on-empty via `if-no-files-found: error`.
