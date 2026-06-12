@@ -1,37 +1,37 @@
 # fixindex
 
-> A feather-weight, file-only personal bug runbook — symptom → fix lookup, in the spirit of `adr-tools`.
+> 羽毛級、純檔案的個人 bug 修理日誌 — 症狀 → 解法即時查詢，借鑑 `adr-tools` 風格。
 
-[繁體中文 README](./README.zh-TW.md)
+[English](./README.en.md)
 
-`fixindex` is ~150 lines of `bash` + `ripgrep`. No database, no daemon, no editor plugin. Every fix you ever solve goes into one Markdown file under `fixes/NNNN-<slug>.md`. The next time the same error message hits your terminal, `fixindex find "<error>"` jumps straight to the fix you wrote last quarter.
+`fixindex` 是約 150 行 `bash` + `ripgrep`。無資料庫、無 daemon、無編輯器外掛。每個你解過的 bug 都進到一個 Markdown 檔 `fixes/NNNN-<slug>.md`。下次同樣的錯誤訊息再噴出來，`fixindex find "<錯誤>"` 直接跳到你上季寫的解法。
 
-It exists because:
+它存在的理由：
 
-- Most personal "second brain" tools are too heavy. You want one command and the answer on stdout.
-- LLM coding agents (Claude Code, Codex, etc.) waste tokens re-discovering bugs you already solved. Pointing them at `fixindex find` before they start exploring saves hours of re-debugging.
+- 多數「第二大腦」工具太重。你想要的只是一個命令、答案直接吐到 stdout。
+- LLM coding agent（Claude Code、Codex…）每次都重新探索你已經解過的 bug，白燒 token。把它指向 `fixindex find` 再開始動手，省下幾小時的重複 debug。
 
-## Install
+## 安裝
 
 ```bash
-# 1. Clone or vendor into a personal notes repo
+# 1. clone 或內嵌到你的個人筆記 repo
 git clone https://github.com/royalskynet/fixindex.git ~/dev/fixindex
 cd ~/dev/fixindex
 
-# 2. Put the CLI on PATH
+# 2. 把 CLI 放上 PATH
 ln -s "$PWD/fixindex" ~/.local/bin/fixindex
-# or: echo 'export PATH="$HOME/dev/fixindex:$PATH"' >> ~/.zshrc
+# 或：echo 'export PATH="$HOME/dev/fixindex:$PATH"' >> ~/.zshrc
 
-# 3. Point it at your runbook (skip if you'll just `cd` into this repo)
+# 3. 指向你的 runbook（如果直接在這 repo 用就不用設）
 export FIXINDEX_DIR="$HOME/notes/runbook/fixes"
 export FIXINDEX_INDEX="$HOME/notes/runbook/FIX-INDEX.md"
 ```
 
-Requirements: `bash` 4+, `ripgrep` (`brew install ripgrep`), `awk`, `find`. macOS and Linux. No Node, no Python required for the CLI itself.
+需求：`bash` 4+、`ripgrep`（`brew install ripgrep`）、`awk`、`find`。macOS 與 Linux。CLI 本身不需要 Node 或 Python。
 
-## Workflow
+## 工作流
 
-### When a bug hits
+### 遇到 bug 時
 
 ```bash
 $ fixindex find "deadlock detected"
@@ -50,10 +50,10 @@ $ fixindex show 0002
 …
 ```
 
-### After you solve something new
+### 修完新 bug 之後
 
-1. Either append a `## §N` block to an existing domain file and add the symptom string to its frontmatter `symptoms:` array,
-2. or scaffold a brand-new domain:
+1. 追加 `## §N` 區段到對應的 domain 子檔，並把新症狀字串加進 frontmatter `symptoms:` 陣列；
+2. 或開一個全新 domain：
 
 ```bash
 $ fixindex new redis-cluster
@@ -61,11 +61,11 @@ $ fixindex new redis-cluster
 re-indexed: /path/to/FIX-INDEX.md
 ```
 
-Then edit `fixes/0004-redis-cluster.md`, fill in `Symptom / Root cause / Fix / Verify`, and you're done.
+接著編輯 `fixes/0004-redis-cluster.md`，把 `Symptom / Root cause / Fix / Verify` 填上即可。
 
-### File shape
+### 檔案結構
 
-Each fix file looks like this (template at `fixes/.template.md`):
+每個 fix 檔長這樣（範本在 `fixes/.template.md`）：
 
 ```markdown
 ---
@@ -88,56 +88,66 @@ related: []
 **Root cause:** …
 **Fix:** …
 **Verify:** …
-**Retrospective:** (optional) Why didn't a prior fix catch this? Skip when there is no lesson.
+**Retrospective:** （選填）為什麼舊解法沒擋住？沒教訓就跳過。
 ```
 
-The frontmatter `symptoms:` array is the **search index** — it's what `fixindex find` scans for. Treat it as a list of error-message strings you'd type into your shell. The body of each `## §N` block is the human-readable runbook. The **Retrospective** row is borrowed from Trellis's debug-retrospective step — record it only when the bug recurred or a prior fix should have caught it.
+frontmatter 的 `symptoms:` 陣列是**搜尋索引** — 那是 `fixindex find` 真正在掃的東西。把它當成「將來你會在 shell 直接打進去的錯誤訊息字串清單」。`## §N` 內文是給人讀的 runbook。
 
-## Commands
+## 命令一覽
 
-| Command | What it does |
-|---------|--------------|
-| `fixindex find <kw>` | Match `<kw>` against frontmatter `symptoms:` entries. First stop. |
-| `fixindex grep <kw>` | Full-text ripgrep across all fix files. Use when `find` misses. |
-| `fixindex show <id>` | `cat fixes/NNNN-*.md`. |
-| `fixindex list` | One-line summary per fix. |
-| `fixindex new <slug>` | Allocate the next ID, scaffold the file, refresh the index table. |
-| `fixindex re-index` | Regenerate the `<!-- fixindex:table -->` block in `FIX-INDEX.md`. Idempotent. |
-| `fixindex supersede <old> <new>` | Mark `<old>` superseded by `<new>` without deleting it. |
-| `fixindex help` | Show the help. |
+| 命令 | 作用 |
+|------|------|
+| `fixindex find <kw>` | 對 frontmatter `symptoms:` 條目做匹配。第一站。 |
+| `fixindex grep <kw>` | 跨所有 fix 檔的全文 ripgrep。`find` 沒命中時用。 |
+| `fixindex show <id>` | `cat fixes/NNNN-*.md`。 |
+| `fixindex list` | 每筆一行摘要。 |
+| `fixindex new <slug>` | 配下一個 ID、scaffold 檔案、刷新索引表。 |
+| `fixindex re-index` | 重生 `FIX-INDEX.md` 內 `<!-- fixindex:table -->` 區塊。冪等。 |
+| `fixindex supersede <old> <new>` | 標記 `<old>` 被 `<new>` 取代，但保留檔案。 |
+| `fixindex help` | 顯示說明。 |
 
-Environment overrides: `FIXINDEX_DIR`, `FIXINDEX_INDEX`, `RG`.
+環境變數：`FIXINDEX_DIR`、`FIXINDEX_INDEX`、`RG`。
 
-## Using fixindex with an LLM coding agent
+## 自然語言觸發（不用記指令）
 
-If you use Claude Code or a similar agent, the goal is **the agent runs `fixindex` automatically — you never type the CLI by hand**.
+安裝對應的 agent snippet 之後，你不需要手敲 `fixindex` 指令 — 直接跟 Agent 說話就夠了。Agent 判斷語意，自動選對應的子命令執行：
 
-**Drop-in snippets** per platform live in [`agent-snippets/`](./agent-snippets/) — pick the file for your tool (Claude / Codex / Cursor / Gemini / opencode / generic) and `cat … >> <your-rules-file>`. Pattern borrowed from Trellis's multi-platform config layout.
+| 你說 | Agent 自動跑 |
+|------|-------------|
+| `Fixindex` 或 `Fixindex <問題描述>` | 依語意選 `find / show / grep / new / supersede / list` |
+| 「postgres 卡住了」「redis 沒回應」（系統名 + 症狀） | `fixindex find "<關鍵字>"` → 讀命中檔 |
+| 貼上錯誤訊息、log 或 stack trace | `fixindex find "<第一條識別字串>"` |
+| 「上次怎麼修的？」「之前有解法嗎？」 | `fixindex find` 查歷史紀錄 |
+| 「修好了」「搞定了」「記一下這個解法」 | 自動 append `## §N` 區段 + 更新 `symptoms:` 陣列 |
+| 全新問題域、沒有對應的 fix 檔 | `fixindex new <slug>` → 填寫範本 |
 
-See [`docs/agent-integration.md`](./docs/agent-integration.md) for the full natural-language dispatch table:
+> **原理**：Agent 負責語意判斷 → 決定指令 → 執行 CLI。`fixindex` 本身仍是純確定性的 CLI — NL 理解由 agent 層承擔，保持工具本身的可靠性。
 
-- **Mode A — explicit keyword `Fixindex <question>`**: agent picks `find / show / grep / new / supersede / list` from your intent.
-- **Mode B — implicit NL triggers**: any system name + symptom, failure verb ("broken / silent / timing out"), or pasted error/log autoruns `fixindex find` *before* the agent starts exploring. Any "fixed it / log this / remember this" autoappends a `## §N` block.
+觸發點分兩類：**主動口令**（`Fixindex <問題>`）讓你掌控時機；**隱性觸發**（說出症狀、貼 log、說修好了）讓 agent 在正確時間點自動查找或記錄，不需要你記得。
 
-A drop-in snippet for your agent's global instructions is at the bottom of that doc.
+## 給 LLM coding agent 用
 
-This converts "let me explore the repo from scratch" into "let me check the runbook first" — and stops the agent from re-deriving the same fix month after month.
+**多平台一鍵 snippet** 在 [`agent-snippets/`](./agent-snippets/) — 挑你工具對應的檔（Claude / Codex / Cursor / Gemini / opencode / 通用），`cat … >> <規則檔>` 就裝完。
 
-## Why feather-weight?
+完整自然語言 dispatch 表（含範例與完整說明）見 [`docs/agent-integration.md`](./docs/agent-integration.md)。
 
-Other approaches considered, and why they're not here:
+把「我從頭探索一遍 repo」變成「我先翻 runbook」 — 同一個解法不會讓 agent 每個月重新推一次。
 
-- **SQLite / vector DB.** Adds a binary blob to your dotfiles and a daemon to maintain. `ripgrep` over ~30 markdown files is already sub-50 ms.
-- **Editor plugin.** Locks you into one editor. The CLI works in any terminal, including over SSH and inside an agent's `bash` tool.
-- **One file per fix (pure adr-tools style).** Personal bug logs explode into hundreds of single-paragraph files. Grouping by *domain* (`postgres-migrations.md` holding 10 related fixes) keeps the file count under control without losing granularity — each `## §N` block is still independently linkable.
-- **LLM-generated summaries / auto-tagging.** Non-deterministic. The frontmatter is the index — you write it once, by hand, and trust it forever.
+## 為什麼要羽毛級
+
+考慮過其他方案，沒收進來的理由：
+
+- **SQLite / vector DB。** 多一個 binary 進 dotfiles、多一個 daemon 要顧。對 ~30 個 markdown 檔做 `ripgrep`，反正本來就 < 50 ms。
+- **編輯器外掛。** 綁死一個編輯器。CLI 在任何 terminal 都能用，包含 SSH 與 agent 的 `bash` 工具。
+- **一個 fix 一個檔（純 adr-tools 風格）。** 個人 bug 日誌很快會炸成幾百個只有一段內容的小檔。改用 *domain* 分組（`postgres-migrations.md` 收 10 條相關 fix）能壓住檔案數但不犧牲粒度 — 每個 `## §N` 區段仍可獨立引用。
+- **LLM 自動摘要 / 自動 tag。** 非確定性。frontmatter 就是索引 — 你手寫一次，永遠信它。
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT — 詳見 [LICENSE](./LICENSE)。
 
-## Prior art
+## 致敬
 
-- [npryce/adr-tools](https://github.com/npryce/adr-tools) — the numbering + auto-index pattern.
-- [danluu/post-mortems](https://github.com/danluu/post-mortems) — proof that plain markdown is enough.
-- [tldr-pages](https://github.com/tldr-pages/tldr) — symptom-first lookup as a UX primitive.
+- [npryce/adr-tools](https://github.com/npryce/adr-tools) — 編號 + 自動 index 模式。
+- [danluu/post-mortems](https://github.com/danluu/post-mortems) — 證明純 markdown 就夠用。
+- [tldr-pages](https://github.com/tldr-pages/tldr) — 把「症狀優先查找」當成 UX primitive。
