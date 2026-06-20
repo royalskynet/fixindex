@@ -54,9 +54,17 @@ hermes -z: no final response was produced; treating the run as failed.
 上游 issue：[#17248](https://github.com/NousResearch/hermes-agent/issues/17248)（empty final after tool calls）、[#34452](https://github.com/NousResearch/hermes-agent/issues/34452)（turn ends empty after tools）。小 flash 模型（`agnes-2.0-flash`）特別容易觸發。
 
 **Fix / 緩解（非根治，bug 在 Hermes 端）：**
-- 設能穩定回 content 的 fallback：`hermes fallback` 把 Agnes 當主、另一家兜底（[docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers)）。
-- 或主模型換不會回 null content 的 provider。
-- 純 chat（非 agentic 大工具集）情境多半正常 —— 失敗集中在 tool-call 後接空回。
+- 設能穩定回 content 的 fallback：Agnes 當主、NVIDIA NIM 兜底（[docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers)）。`hermes fallback add` 是純互動 picker（無 flag），無頭環境改 `config.yaml` 直接寫 **top-level** `fallback_providers`（schema 見 `hermes_cli/fallback_config.py`：list of `{provider, model, base_url?}`）：
+  ```yaml
+  fallback_providers:
+    - provider: nvidia
+      model: meta/llama-3.3-70b-instruct
+      base_url: https://integrate.api.nvidia.com/v1
+  ```
+  `.env` 配 `NVIDIA_API_KEY=nvapi-...`。NIM OpenAI 端點 `https://integrate.api.nvidia.com/v1`，`meta/llama-3.3-70b-instruct` 回正常 content + tool_calls，不踩 null bug。驗證：`hermes fallback list`。
+- **⚠️ caveat**：fallback **只在 rate-limit / 5xx / connection error 觸發**，**不接** no-final-response（harness 內部 bug，非失敗類）也不接 401（non-retryable client error 直接 abort）。要靠 fallback 救 no-final-response 是無效的。
+- 真要 agentic 穩，把 NIM `meta/llama-3.3-70b-instruct` 拉成 **primary**（回 content 穩），Agnes 降 fallback。
+- 純 chat / 簡短 prompt（不觸發 tool call）多半正常 —— 設好 fallback 後實測 `hermes -z` 4/4 通。失敗集中在會觸發 tool-call→空回的 prompt。
 
 ## §3 隔離法：raw curl 直打端點，分開 config 問題 vs harness 問題
 
