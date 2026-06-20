@@ -40,6 +40,7 @@ OPENAI_BASE_URL=https://apihub.agnes-ai.com/v1
 
 **Agnes 端點**：`https://apihub.agnes-ai.com/v1/chat/completions`，OpenAI 兼容，vLLM 後端。
 **Models**（`/v1/models` 撈）：文字 `agnes-1.5-flash`、`agnes-2.0-flash`；另有 `agnes-image-*`、`agnes-video-*`。key 格式 `sk-`。
+官方文檔提的高精度 **Claw 系列**文字模型 **free/一般 key 拿不到** —— 直接點名 `claw-*` 回 HTTP **503「No available channel」**（帳號沒分配到該後端 channel，需更高方案）。即 flash 是這把 key 的天花板，null-content agentic 病無法靠換 Agnes 內部模型解，要靠 fallback / 換主備。
 
 ## §2 「no final response was produced」根因 = Hermes harness 已知 bug
 
