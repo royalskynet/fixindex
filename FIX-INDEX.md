@@ -21,10 +21,9 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 <!-- fixindex:table:start -->
 | ID | Slug | Title | Tags |
 |----|------|-------|------|
-| 0001 | deploy-pipeline | Deploy pipeline / CI runner / artifact upload | ci,deploy,docker,github-actions |
-| 0002 | postgres-migrations | PostgreSQL migrations / locking / connection pool | postgres,migrations,locking,connection-pool |
-| 0003 | tls-and-tunnels | TLS / reverse proxy / tunnel webhook drift | tls,nginx,cloudflare,tunnel,webhook |
 <!-- fixindex:table:end -->
+
+> Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
 
 ## Adding entries
 
