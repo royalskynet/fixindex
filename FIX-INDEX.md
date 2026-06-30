@@ -21,7 +21,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 <!-- fixindex:table:start -->
 | ID | Slug | Title | Tags |
 |----|------|-------|------|
-| 0001 | lark-meeting-notes | lark-meeting-notes / audio-meeting-notes 摘要與 LLM 卡住 | lark, meeting-notes, llm, spawnSync |
+| 0001 | lark-meeting-notes | lark-meeting-notes / audio-meeting-notes 摘要與 LLM 卡住 | lark, meeting-notes, llm, spawnSync, superpowers, skill-bootstrap, timeout, nvidia-nim, openrouter, env, opt-in, caveman, codex, claude-cli |
 | 0002 | provider-api-overload | Provider API request failed — 長思考/大 context 單請求過肥中斷 | claude-code, anthropic-api, provider, overload, context, extended-thinking |
 | 0003 | free-claude-code-model-mapping | free-claude-code (fcc) sonnet/opus 映射模型持續 Provider API request failed | free-claude-code, fcc, nvidia-nim, model-routing, provider, gpt-oss-120b, thinking-injection, mistral-large, server-down |
 | 0004 | git-clone-early-eof-shallow | git clone 大歷史 repo 反覆 early EOF / .invalid HEAD —— 用 shallow clone 繞過 | git, git-clone, early-eof, rpc-failed, http2-cancel, shallow-clone, depth-1, invalid-head, broken-branch, zombie-process, prophet-protocol |
