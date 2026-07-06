@@ -73,7 +73,7 @@ cmd_find() {
       {
         f=$1; ln=$2; rest=substr($0, length($1)+length($2)+3)
         # only show lines that look like symptoms entries or section headers
-        if (rest ~ /^[[:space:]]*-[[:space:]]*"/ || rest ~ /^##[[:space:]]*§/) {
+        if (rest ~ /^[[:space:]]*-[[:space:]]/ || rest ~ /^##[[:space:]]*§/) {
           n=split(f, a, "/"); base=a[n]; sub(/\.md$/,"",base)
           printf "  %-30s  L%-4s  %s\n", base, ln, rest
         }
