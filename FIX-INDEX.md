@@ -21,6 +21,8 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 <!-- fixindex:table:start -->
 | ID | Slug | Title | Tags |
 |----|------|-------|------|
+| 0001 | coco-monday-weekly-schedule-night-shift-notify | TODO |  |
+| 0002 | omniroute-fts-tail-nim-fallback | OmniRoute FTS combo tail NIM fallback | omniroute, fts, combo, nvidia-nim |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
