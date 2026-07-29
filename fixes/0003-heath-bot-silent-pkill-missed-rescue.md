@@ -3,6 +3,9 @@ id: 3
 slug: heath-bot-silent-pkill-missed-rescue
 title: Heath bot 靜默 20 天 — pkill 廣域 pattern 誤殺後漏救
 tags:
+- token-401
+- session-not-found
+- session-store
 - heath
 - wellally
 - tg-bridge
@@ -10,6 +13,10 @@ tags:
 - pkill
 - fix-0179
 symptoms:
+- GrammyError 401 Unauthorized getUpdates/getMe/setMyCommands
+- Claude: No conversation found with session ID
+- bridge.log ELIFED52 exit code 143/1 crash-loop
+- launchd state=running but actually crash-looping
 - Heath/@healthetherbot 不回話
 - bot 靜默數週
 - launchctl list 查無服務
@@ -53,3 +60,24 @@ done
 - 共用 code 的多 instance（Heath/Alice）用 pkill 廣域 pattern 是定時炸彈，應永遠用 cwd-aware pattern 兜底
 - launchd domain check → `launchctl print` 非 0 比看 exit code 更能抓「根本不在 domain」的 case
 - Claude SDK bot 的工作區 trust 設定也會讓 bridge 卡住不回應
+
+## §2 Token 401 + Session not found — 雙重故障致 crash-loop
+
+**Symptom:** `bridge.error.log` 重複 `GrammyError: Call to 'getUpdates' failed! (401: Unauthorized)` + `getMe` 401 + `setMyCommands` 401；`bridge.log` 顯示多次 `ELIFECYCLE Command failed with exit code 143/1`，每次重啟立即 crash；launchd 顯示 `state=running` 但因 KeepAlive 反覆重啟不易察覺；用戶發訊息時 Claude 回報 `No conversation found with session ID: fe78e0ae-d20d-4b33-be3d-b49ef549ab0e`
+
+**Root cause:** 兩層疊加：(1) Telegram bot token 失效，grammy 所有 API 呼叫 401；(2) `data/sessions/7852197786.json` 存的 sessionId `fe78e0ae` 在 Claude 端已被清理，bridge 每次 `--resume` 都傳不存在的 session
+
+**Fix:**
+1. `.env` → 換新 `TELEGRAM_BOT_TOKEN=8288581464:AAEJZUtwi_ya3Izn-ChPuCsaH43naInVGsI`
+2. 清 session：`echo '{"sessionId":null,"updatedAt":"..."}' > data/sessions/7852197786.json`
+3. `launchctl bootout gui/501/health.wellally.tg-bridge` → `launchctl bootstrap gui/501 ~/Library/LaunchAgents/health.wellally.tg-bridge.plist`
+
+**Verify:**
+- `curl "https://api.telegram.org/bot<TOKEN>/getMe"` → ok:true, `first_name: Heath希思`
+- `curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"` → url:""，無 webhook 衝突
+- `ps -o etime=,pid= -p $pid` → 存活 >2 分鐘無 crash
+- `bridge.error.log` 不再增長
+
+**Retrospective:**
+- Bot 401 crash-loop 很難從 launchd `state=running` 發現，依靠 `bridge.error.log` 時間戳判斷是否新錯誤
+- Session not found 原因：session store 不感知 Claude 端 session 存活狀態，應考慮在 runner 層 catch `No conversation found` 錯誤後自動清 session 重試
