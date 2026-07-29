@@ -25,7 +25,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0002 | omniroute-fts-tail-nim-fallback | OmniRoute FTS combo tail NIM fallback | omniroute, fts, combo, nvidia-nim |
 | 0003 | heath-bot-silent-pkill-missed-rescue | Heath bot 靜默 20 天 — pkill 廣域 pattern 誤殺後漏救 | token-401,session-not-found,session-store,heath,wellally,tg-bridge,launchd,pkill,fix-0179 |
 | 0004 | fts-dispatch-not-in-slash-menu | "fts codex `/dispatch` 不出現在斜線選單——prompt 放在 Happy 不掃的目錄" | "codex-fts", "happy", "dispatch", "skill-system" |
-| 0005 | e2e-fi-command-verify | TODO |  |
+| 0005 | e2e-fi-command-verify | "/fi 斜線指令 E2E 全驗收" | "e2e", "fixindex", "fi" |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
