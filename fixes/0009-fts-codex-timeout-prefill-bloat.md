@@ -18,6 +18,10 @@ symptoms:
   - "改 config.toml 的 model 但 happy live session 仍跑 free-tools-heavy（input 44k 肥）"
   - "瘦 slug 下模型對 happy__change_title 回『無此工具』（其實要先 tool_search）"
   - "happy 升版後 codex slug patch 消失、session 又變肥"
+  - "Codex error: stream disconnected before completion / Responses stream completed with no assistant output"
+  - "anomalies.jsonl responses-empty-completed（上游回 completed 但零輸出）"
+  - "app.log [ERROR] [400]: Validation: Unsupported parameter(s): `verbosity`（NVIDIA NIM）"
+  - "模型把 tool_search 當 shell 指令跑：zsh:1: command not found: tool_search"
 status: fixed
 supersedes: []
 related: [0002]
@@ -371,3 +375,61 @@ const DEFAULT_CODEX_MODEL = "free-tools-heavy";   // 只有手機每則訊息 me
 ⚠️ **第二坑：`tool_search` 是原生 tool call，不是 shell 指令。** 加了 AGENTS.md 指示後模型照做，但做成 `exec_command {"cmd":"tool_search happy__change_title"}` → `zsh:1: command not found: tool_search`，然後照樣回「我沒有 `functions.happy__change_title` 這個工具」。
 
 `tool_search` 的 description（4083 chars）尾端列出 deferred 來源，**`- happy` 確實在裡面**（連同 market-data / markitdown / mem0 / obsidian / repomix / smart_connections）→ `change_title` 拿得到，純粹是模型不會叫。AGENTS.md 已改成明寫「原生工具呼叫，禁止用 `exec_command` 跑」+ 列出可查的 server 名。這條對弱模型（nemotron 系）特別必要。
+
+### 6.8 ★★★ NIM `verbosity` 400 → 托底吐空 → turn 被停（真正讓人「連正常回覆都不行」的那個）
+
+症狀是 codex 端兩行紅字：
+
+```
+Codex error: stream disconnected before completion: FTS
+Codex Responses stream completed with no assistant output or tool call.
+strip-proxy stopped the turn defensively; start a new fts Codex session and retry.
+```
+
+`app.log` 現場（每個 turn 都重演一次）：
+
+```
+11:07:49 [ERROR] [400]: Validation: Unsupported parameter(s): `verbosity`
+11:07:49 ProxyEgress nvidia/69a315e9  status=error      ← ladder 第一棒每次 400
+11:07:50 ProxyEgress openrouter/fbc913e1 status=success ← 掉到托底，但零輸出
+11:07:50 anomaly: responses-empty-completed             ← strip-proxy 防禦性停 turn
+```
+
+**因果鏈**：`gpt-5.4` slug 的 model metadata 有 `support_verbosity` → codex 送 `verbosity`（或 `text.verbosity`）→ NVIDIA NIM 不吃這參數，直接 400 → fallback 到 openrouter 那棒回 `completed` 但 output 空 → strip-proxy 記 `responses-empty-completed` 並停 turn。
+
+**修法**（`strip-proxy/server.mjs`，`pinFtsRequestModel` 內，`node --check` 過）：
+
+```js
+// 放在 isFtsAllowedModel 早退出之前，否則 gpt-5.4 這條路剝不到
+let strippedVerbosity = false;
+if ('verbosity' in parsed) { delete parsed.verbosity; strippedVerbosity = true; }
+if (parsed.text && typeof parsed.text === 'object' && 'verbosity' in parsed.text) {
+  delete parsed.text.verbosity; strippedVerbosity = true;
+}
+if (isFtsAllowedModel(parsed.model)) {
+  if (strippedVerbosity) return { body: Buffer.from(JSON.stringify(parsed)), rewroteFrom: null, stream, model: parsed.model };
+  return { body: requestBody, rewroteFrom: null, stream, model: parsed.model };
+}
+```
+沒剝到就回原 buffer，不多做序列化。pin 那條路本來就重新 serialize，自動帶到。生效要 `launchctl kickstart -k gui/501/com.royalskynet.freetools-stripproxy`（**不要** bootout）。
+
+⚠️ **歸因教訓**：這個 400 從 10:19 就在 log 裡，但當時在追 slug/tool schema，沒回頭看 `app.log`。症狀「session 突然全掛」出現時，先看 `app.log` 的 ladder 逐棒狀態，別預設是自己剛改的東西。（`responses-empty-completed` 的時間戳早於本次 config 改動 → 立刻排除自己。）
+
+**未修的相鄰問題**：托底棒 `openrouter/fbc913e1` 回 `success` 卻零輸出。NIM 修好後多數 turn 不碰它，但它該不該留在 ladder 是獨立議題。
+
+### 6.9 瘦 slug 的 tool 可達性：`apps=false` 有效、`tool_search=false` 無效、prompt 完全治不了
+
+想讓 `happy__change_title` 在瘦 slug 下可達，試了三層，只有一層有效：
+
+| 手段 | 官方收錄 | 實測 |
+|---|---|---|
+| AGENTS.md 教「先 `tool_search` 查」 | — | **無效**。session A 把它當 shell 跑（`zsh:1: command not found: tool_search`）；session B 連試都沒試直接回「不存在」。規則確認有注入（injected text 第 629 字元起） |
+| `[features] apps = false` | ✅ | **有效**。deferred 來源 8 server → 只剩 `- happy`；tools schema **11873 → 8208 chars** |
+| `[features] tool_search = false` | ❌ 僅存在於 binary strings | **無效**。`tool_search` 工具照在、happy 照樣延遲。推測 flag 被 slug 的 `supports_search_tool: true` 蓋過 |
+| `tool_search_always_defer_mcp_tools = false` | ❌ 同上 | 未驗完（撞上 §6.8 停機）→ 已回滾 |
+
+官方 config 文件位置：`docs/config.md` 只是 stub，實體在 `https://learn.chatgpt.com/docs/config-file/config-reference`（`developers.openai.com/codex/config-reference` 會 308 過去）。那裡有 `features.apps`、`mcp_servers.<id>.enabled` / `enabled_tools` / `disabled_tools`，**沒有** 任何 `tool_search` 相關 key。
+
+判別「哪些 server 被 deferred」的最快法：讀 `~/.omniroute/call_logs/<date>/` 最新 json 的 `requestBody.tools`，找 `type: "tool_search"` 那筆的 description 尾端清單。注意 `~/.codex`（market-data/mem0/obsidian/repomix/smart_connections）與 `~/.codex-fts`（只有 happy）清單不同 —— 可以用它反推這筆 log 是哪個 CODEX_HOME 發的。
+
+**現況結論**：`change_title` 在瘦 slug 下仍不可達，代價換來 prefix 44k → ~8k。判斷是划算的，不再投入（硬救的路只剩改 happy dist 注入自家 tool，或退回肥 slug）。
