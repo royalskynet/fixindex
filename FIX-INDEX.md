@@ -29,6 +29,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0006 | mini-power-failure-vdd-boost-uvlo | Mini 突然斷電重啟 — 供電壓降 UVLO |  |
 | 0007 | cheeragent-hook-tailread-pregen | "cheeragent hook 效能優化 — tail-read + background pregen" | "cheeragent", "hook", "performance", "node" |
 | 0008 | --help | TODO |  |
+| 0009 | fts-codex-timeout-prefill-bloat | TODO |  |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
