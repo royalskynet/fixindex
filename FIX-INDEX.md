@@ -31,6 +31,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0008 | --help | TODO |  |
 | 0009 | fts-codex-timeout-prefill-bloat | "FTS Codex 停止：header timeout（協定層）+ 75k tool schema（臃腫層）+ 自評放水（判定層）" | fts, codex, omniroute, strip-proxy, timeout, tool_search, hooks, hook-trust, claude-mem, mem0, skills |
 | 0010 | fts-harness-continue-needed-loop | FTS harness poll 無限 continue-needed、監控空轉、context 無人守門 | fts, harness, codex, launchd, strip-proxy, stop-hook, poll |
+| 0011 | fts-harness-layer-stall-coverage | FTS session 宣告下一步後停擺、HL 三層全數空轉 | fts, harness, codex, stop-hook, goals, poll, launchd, bash |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
