@@ -2,7 +2,7 @@
 id: 0002
 slug: omniroute-fts-tail-nim-fallback
 title: OmniRoute FTS combo tail NIM fallback
-tags: [omniroute, fts, combo, nvidia-nim]
+tags: [omniroute, fts, combo, nvidia-nim, launchd, timeout, readiness]
 symptoms:
   - "dead placeholder wrapper scripts"
   - "rebuild-combos.py only rebuilds 2 combos not 5"
@@ -11,6 +11,17 @@ symptoms:
   - "FTS OmniRoute combo needs another NIM after OpenRouter free"
   - "free-tools-heavy OpenRouter free tail fallback should continue to pinned NIM"
   - "add NVIDIA NIM key as final fallback in free-tools-heavy"
+  - "Stream produced no non-ping SSE event within 60000ms"
+  - "504 POST /v1/responses Total In 0 Total Out 0"
+  - "strip-proxy 200 but Codex gets 502"
+  - "omniroute 20128 connection refused / 000"
+  - "launchctl print Could not find service 501"
+  - "plist env change not taking effect after kickstart"
+  - "deepseek-v4-pro slow prefill stall fallback"
+  - "slow prefill ping-only timeout readiness"
+  - "502 upstream dead orphan process"
+  - "kickstart only restarts process does not re-read plist"
+  - "launchd bootstrap kickstart plist env diff"
 status: active
 supersedes: []
 related: []
@@ -30,3 +41,22 @@ related: []
 **Fix:** Commit all six dirty files as a single changeset (`1903930`): add tail NIM provider to `providers.json`, tail slot to `combo-free-tools-heavy.json`, update four mapping descriptions to include "pinned NIM tail fallback", expand rebuild script to iterate over all five combo JSON files, delete two dead wrapper scripts. Validate JSON syntax (`python3 -m json.tool`) and Python syntax (`py_compile`) before commit. Delete `docs/remaining-dirty-changes.md` (not committed).
 **Verify:** `git status` shows clean working tree. JSON configs pass `json.tool`. `rebuild-combos.py` passes `py_compile`. All repo references to deleted wrappers return empty.
 **Retrospective:** Same lesson as §1: repo config and live SQLite are two separate surfaces. When editing live DB, always plan to sync JSON configs in the same session to prevent drift.
+
+## §3 504: Readiness deadline vs deepseek slow prefill stall
+**Symptom:** Codex FTS dashboard shows `504 POST /v1/responses` with `Total In=0 Total Out=0` and error `Stream produced no non-ping SSE event within 60000ms`. Dashboard shows long "duration" but that's Codex agentic turn accumulation; each round showed `deepseek succeeded (Xms, 0 fallbacks)` normally.
+**Root cause:** Free NIM `deepseek-v4-pro` prefill >60s on large payload (~139K in + 25 tools) only sending ping keep-alives; OmniRoute readiness deadline (60s) judged stall. Combo step1/step2 both deepseek doubled the waste (step2 burned another 60-85s before falling to step3).
+**Fix:** `STREAM_READINESS_MAX_TIMEOUT_MS` 60000 → **85000** in `~/Library/LaunchAgents/com.royalskynet.freetools-omniroute.plist`; combo dedup step2 to a different model (Nemotron Ultra free).
+**Cross-layer boundary (critical):** Strip-proxy `RESPONSES_STREAM_IDLE_MS=90000`, and `server.mjs:264-268` resets idle timer on **any chunk including ping** → readiness deadline **must be < 90s** or strip-proxy kills first and combo fallback never triggers. 85s is the safe ceiling. Raising further requires raising strip-proxy idle in tandem.
+**Verify:** `ps eww <pid> | grep READINESS` shows 85000; app.log stall should fallback to a **different model** (not deepseek again).
+**Stats baseline:** deepseek succeeded 2992 / failed 689 (~18.7%), `no non-ping` events 107.
+
+## §4 502: Omniroute orphan + bootstrap vs kickstart
+**Symptom:** Strip-proxy `/_proxy/status`=200 but Codex receives 502; `curl 127.0.0.1:20128/v1/models` returns `000`; `lsof -iTCP:20128` empty.
+**Root cause:** Omniroute was **not managed by launchd** (orphan process). `launchctl print gui/$(id -u)/com.royalskynet.freetools-omniroute` → `Could not find service ... 501`. Meanwhile `kickstart -k` **only restarts the process, does NOT re-read plist**, so plist env change (`STREAM_READINESS_MAX_TIMEOUT_MS=85000`) never took effect while process ran.
+**Fix:** `plutil -lint` validate plist → `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.royalskynet.freetools-omniroute.plist` (RunAtLoad=true starts it).
+**Rule (key knowledge):**
+- Change **plist env** → **MUST `bootstrap`** (reloads definition)
+- Change **live DB combo** → `kickstart -k` suffices (restart re-reads DB)
+**Guard boundary:** `~/.claude/hooks/guard.js:91` blocks `launchctl (unload|remove|bootout)`; **does NOT block `bootstrap` / `kickstart`** → restarting dead service needs no `GUARD_OK=1`.
+Also note: guard blocks "local admin API with API key sent out" → query combo via `sqlite3 ~/.omniroute/storage.sqlite` directly, not via admin API with credentials.
+**Verify:** `launchctl list | grep omniroute` shows pid; 20128 `/v1/models`=200; strip-proxy=200.
