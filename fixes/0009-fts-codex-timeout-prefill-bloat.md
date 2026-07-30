@@ -15,6 +15,9 @@ symptoms:
   - "failed to load skill ... missing YAML frontmatter delimited by ---"
   - "codex hook 指向不存在的腳本卻不報錯（mem0-hooks）"
   - "hook: PreToolUse Failed 但 hook 本身 exit=0"
+  - "改 config.toml 的 model 但 happy live session 仍跑 free-tools-heavy（input 44k 肥）"
+  - "瘦 slug 下模型對 happy__change_title 回『無此工具』（其實要先 tool_search）"
+  - "happy 升版後 codex slug patch 消失、session 又變肥"
 status: fixed
 supersedes: []
 related: [0002]
@@ -335,3 +338,24 @@ Stop              [fts-acceptance-gate, cheeragent capture, cmem summarize]
 - **`rtk hook claude` stdout 全空 → codex 報 `PreToolUse Failed`**。它 exit=0、工作有做，純 cosmetic。`~/.codex` 與 `~/.codex-fts` 兩邊同樣行為，非遷移造成。
 - **兩個 skill 缺 frontmatter 已停用**（改名 `SKILL.md.disabled`）：`hermes-system-prompt-architecture`（整份是 LLM 回覆連 ```markdown 圍籬一起存檔）、`cai-kangyong`（純缺 frontmatter）。真內容都在，想救就把外殼剝掉。
 - **`~/.codex-fts/AGENTS.md` 曾有 heredoc 殘留**（`AGENTS_EOF` + `wc -c ~/...` 兩行漏進內容），已刪。用 heredoc 寫檔後要回讀確認尾巴。
+
+### 6.7 ★★ live session 的 slug 不讀 config.toml/wrapper —— happy dist 寫死 + 每輪覆寫
+
+§6.1 把 `config.toml` slug 改成 `gpt-5.4`，但**手機開的 live session 仍跑 `free-tools-heavy`**（rollout meta `model: free-tools-heavy`、`input_tokens 44241` 肥）。
+
+根因：happy 對 codex 的 model **不讀 config.toml、不讀 env**，是 dist bundle 寫死的常數，每個 turn 當 per-turn override 送進 app-server → 蓋掉 config.toml 與 wrapper 的 `-c model=`。
+
+```
+~/.local/share/happy-codex-fts/releases/20260728121959/happy/dist/index-Cji64kS2.mjs:10062
+const DEFAULT_CODEX_MODEL = "free-tools-heavy";   // 只有手機每則訊息 meta.model 能覆寫
+```
+
+- 入口 `dist/index.mjs` import `Cji64kS2` chunk（count 1）；全 dist 只此一處定義 `DEFAULT_CODEX_MODEL`，無其他 slug 來源。
+- `10191`/`10196` 的 reset 引用同一常數，改一處全跟。
+- 證據：三個相鄰 session，`gpt-5.4` 那兩個 `input≈6.8k`；`free-tools-heavy` 那個 `input=44241`。
+
+**修法**：`free-tools-heavy` → `gpt-5.4`，`node --check` 過。**生效時機**：happy 每 session 是新 node 進程 launch 時讀檔 → 下次重開 fts 生效；跑著的 daemon 記憶體舊值不變。
+
+⚠️ **升級坑**：這是改 vendored dist（release 目錄帶版號 `20260728121959`）。**happy 一升版就被新 bundle 覆蓋，patch 消失要重打。** 重打步驟：新 release 目錄下 `grep -rn 'DEFAULT_CODEX_MODEL = ' dist/` 找那一行，同樣替換。
+
+**瘦 slug 副作用補償**：`gpt-5.4` 走 `supports_search_tool: true` → 工具延遲載入，初始清單只有 `tool_search`。模型會對不在清單的工具（如 `happy__change_title`）直接回「無此工具」。已在 `~/.codex/AGENTS.md`（fts symlink 共用）加「# 工具發現」節：不在清單先 `tool_search` 查、禁回「無此工具」。
