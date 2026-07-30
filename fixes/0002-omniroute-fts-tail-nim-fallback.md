@@ -22,6 +22,9 @@ symptoms:
   - "502 upstream dead orphan process"
   - "kickstart only restarts process does not re-read plist"
   - "launchd bootstrap kickstart plist env diff"
+  - "plist env fix reverted after install-launchd.sh re-run"
+  - "STREAM_READINESS_MAX_TIMEOUT_MS reset to default"
+  - "live fix not synced to plist template"
 status: active
 supersedes: []
 related: []
@@ -60,3 +63,10 @@ related: []
 **Guard boundary:** `~/.claude/hooks/guard.js:91` blocks `launchctl (unload|remove|bootout)`; **does NOT block `bootstrap` / `kickstart`** → restarting dead service needs no `GUARD_OK=1`.
 Also note: guard blocks "local admin API with API key sent out" → query combo via `sqlite3 ~/.omniroute/storage.sqlite` directly, not via admin API with credentials.
 **Verify:** `launchctl list | grep omniroute` shows pid; 20128 `/v1/models`=200; strip-proxy=200.
+
+## §5 §3's 85000 fix silently reverted to 30000 by a later install-launchd.sh re-run
+**Symptom:** After `npm update -g omniroute` (3.8.48→3.8.49, unrelated routine upgrade), baseline check of live plist showed `STREAM_READINESS_MAX_TIMEOUT_MS=30000` / `STREAM_READINESS_TIMEOUT_MS=20000` instead of the §3 fix's 85000.
+**Root cause:** §3's fix was applied as a **direct edit to the live plist**, never fed back into `guardian/com.royalskynet.freetools-omniroute.plist.tmpl` (still had the original 30000/20000 defaults). `guardian/install-launchd.sh` sed-substitutes the template's literal values straight into the installed plist — no separate override layer. A later re-run of `install-launchd.sh` (around the Block C/D/E harness work, commit `3898ed8`) regenerated the plist from the stale template and silently dropped the 85000 fix back to 30000. `git log -S "85000"` across the whole repo found zero hits — the value never existed in version control, only live.
+**Fix:** Edit `guardian/com.royalskynet.freetools-omniroute.plist.tmpl` to 85000 (commit `5d53a8d`) so the template is now the source of truth; re-run `install-launchd.sh` to regenerate the plist; `launchctl kickstart -k gui/$(id -u)/com.royalskynet.freetools-omniroute` to force the running process to pick up the new env (matches §4's kickstart-vs-bootstrap rule — kickstart alone doesn't re-read plist, but `install-launchd.sh`'s bootstrap already reloaded the definition, so kickstart here just restarts into it).
+**Rule (key knowledge):** Any live-only plist/env tuning fix **must** be written back into its `.tmpl` in the same session, or the next `install-launchd.sh` run reverts it with zero warning. Same repo-vs-live-drift lesson as §1/§2, but this time repo (stale) beat live (correct) instead of the other way round.
+**Verify:** `ps eww <pid> | grep STREAM_READINESS_MAX_TIMEOUT_MS` shows 85000 on the pid currently held by `launchctl list | grep omniroute`; `git log -S "85000" -- guardian/` now shows a hit.
