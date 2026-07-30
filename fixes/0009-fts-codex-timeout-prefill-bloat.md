@@ -358,4 +358,16 @@ const DEFAULT_CODEX_MODEL = "free-tools-heavy";   // 只有手機每則訊息 me
 
 ⚠️ **升級坑**：這是改 vendored dist（release 目錄帶版號 `20260728121959`）。**happy 一升版就被新 bundle 覆蓋，patch 消失要重打。** 重打步驟：新 release 目錄下 `grep -rn 'DEFAULT_CODEX_MODEL = ' dist/` 找那一行，同樣替換。
 
-**瘦 slug 副作用補償**：`gpt-5.4` 走 `supports_search_tool: true` → 工具延遲載入，初始清單只有 `tool_search`。模型會對不在清單的工具（如 `happy__change_title`）直接回「無此工具」。已在 `~/.codex/AGENTS.md`（fts symlink 共用）加「# 工具發現」節：不在清單先 `tool_search` 查、禁回「無此工具」。
+**瘦 slug 副作用補償**：`gpt-5.4` 走 `supports_search_tool: true` → MCP 工具延遲載入，初始清單 10 支（`exec_command`/`write_stdin`/`update_plan`/`apply_patch`/`view_image`/`request_user_input`/3 支 mcp resource + `tool_search`）。已在 `~/.codex/AGENTS.md`（fts symlink 共用）加「# 工具發現」節。
+
+**驗收（2026-07-30 18:18 session `019fb288`，patch 後重開）**：
+
+| 項 | 結果 |
+|---|---|
+| rollout `turn_context.model` | ✅ `gpt-5.4`（三個 turn 都是） |
+| `input_tokens` | ✅ 9954 → 10218（cached 8704）；vs 舊 44241 |
+| tool 可達性 | ⚠️ 見下 |
+
+⚠️ **第二坑：`tool_search` 是原生 tool call，不是 shell 指令。** 加了 AGENTS.md 指示後模型照做，但做成 `exec_command {"cmd":"tool_search happy__change_title"}` → `zsh:1: command not found: tool_search`，然後照樣回「我沒有 `functions.happy__change_title` 這個工具」。
+
+`tool_search` 的 description（4083 chars）尾端列出 deferred 來源，**`- happy` 確實在裡面**（連同 market-data / markitdown / mem0 / obsidian / repomix / smart_connections）→ `change_title` 拿得到，純粹是模型不會叫。AGENTS.md 已改成明寫「原生工具呼叫，禁止用 `exec_command` 跑」+ 列出可查的 server 名。這條對弱模型（nemotron 系）特別必要。
