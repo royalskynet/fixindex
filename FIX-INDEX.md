@@ -32,6 +32,9 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0009 | fts-codex-timeout-prefill-bloat | "FTS Codex 停止：header timeout（協定層）+ 75k tool schema（臃腫層）+ 自評放水（判定層）" | fts, codex, omniroute, strip-proxy, timeout, tool_search, hooks, hook-trust, claude-mem, mem0, skills |
 | 0010 | fts-harness-continue-needed-loop | FTS harness poll 無限 continue-needed、監控空轉、context 無人守門 | fts, harness, codex, launchd, strip-proxy, stop-hook, poll |
 | 0011 | fts-harness-layer-stall-coverage | FTS session 宣告下一步後停擺、HL 三層全數空轉 | fts, harness, codex, stop-hook, goals, poll, launchd, bash |
+| 0012 | fts-harness-selfheal-online | FTS harness 自癒閉環上線 — 假警報止血、空轉 turn 偵測、doctor/layer1.8 啟用 | fts, harness, launchd, telegram, acceptance-gate, opencode, codex, self-heal |
+| 0013 | novelvault-migo-cleanup | TODO |  |
+| 0014 | opencode-dispatch-protocol | opencode 派工協定 — argv 吞旗標掛死、stdin + --format json 串流監控 | opencode, dispatch, mannie, yargs, observability, harness |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.

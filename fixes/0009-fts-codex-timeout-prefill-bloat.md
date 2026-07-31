@@ -22,6 +22,10 @@ symptoms:
   - "anomalies.jsonl responses-empty-completed（上游回 completed 但零輸出）"
   - "app.log [ERROR] [400]: Validation: Unsupported parameter(s): `verbosity`（NVIDIA NIM）"
   - "模型把 tool_search 當 shell 指令跑：zsh:1: command not found: tool_search"
+  - "fts new 回報已開 session，但 log 只有 ^D / daemon list 出現 stale session"
+  - "Happy app 傳訊無反應；daemon log 顯示 Removing stale session with PID"
+  - "新 FTS session 運轉中但無回應；CodexAppServer Turn timed out after 600000ms"
+  - "FTS turn 卡在 MCP startup，repomix 只有 starting 沒有 ready/failed"
 status: fixed
 supersedes: []
 related: [0002]
@@ -433,3 +437,85 @@ if (isFtsAllowedModel(parsed.model)) {
 判別「哪些 server 被 deferred」的最快法：讀 `~/.omniroute/call_logs/<date>/` 最新 json 的 `requestBody.tools`，找 `type: "tool_search"` 那筆的 description 尾端清單。注意 `~/.codex`（market-data/mem0/obsidian/repomix/smart_connections）與 `~/.codex-fts`（只有 happy）清單不同 —— 可以用它反推這筆 log 是哪個 CODEX_HOME 發的。
 
 **現況結論**：`change_title` 在瘦 slug 下仍不可達，代價換來 prefix 44k → ~8k。判斷是划算的，不再投入（硬救的路只剩改 happy dist 注入自家 tool，或退回肥 slug）。
+
+### 6.10 `fts new` 假成功：`script` 收到 stdin EOF，session 立即退出
+
+**Symptom:** `fts new` 回報 `已開新 fts codex session (pid=...)`，但 `~/.happy/logs/fts-new-*.log` 只有 `^D`，或 Happy daemon list 短暫出現新 session 後 PID 查不到。新 session 無法穩定從手機端接管。
+
+**Root cause:** `~/.local/bin/fts` 用：
+
+```bash
+nohup /usr/bin/script -q /dev/null "$happy" codex --yolo </dev/null >"$log" 2>&1 &
+```
+
+headless 下 `</dev/null` 讓 `script(1)` 建好偽 TTY 後立即收到 EOF。`happy-codex-fts codex` 可能已註冊 session，但 wrapper / app-server 隨後退出，daemon list 會留下 stale 記錄。
+
+**Fix:** 保持 stdin 存活，讓 `script` 的 PTY 不收到 EOF：
+
+```bash
+nohup /bin/sh -c 'tail -f /dev/null | /usr/bin/script -q /dev/null "$1" codex --yolo' sh "$happy" >"$log" 2>&1 &
+```
+
+**Verify:** `bash -n ~/.local/bin/fts` 通過；用新啟動方式產生的 `pid-*.log` 看到 `Session created/loaded`、`[happyMCP] server:ready`、`[CodexAppServer] Connected and initialized`、`[MessageQueue2] Waiting for messages...`。
+
+### 6.11 `script` 保 stdin 仍不夠：改用 tmux 當 detached 宿主
+
+**Symptom:** 手機端 Happy app 對新開 FTS session 傳訊無反應。`daemon list` 已不含該 session；daemon log：
+
+```text
+[DAEMON RUN] Registered externally-started session cms7t3wh...
+[DAEMON RUN] Removing stale session with PID 45790 (process no longer exists)
+```
+
+**Root cause:** §6.10 的 `tail -f /dev/null | script ...` 能讓 session 註冊並初始化到 `Waiting for messages...`，但 `script` 宿主仍會在 daemon stale cleanup 前退出。Happy daemon 追蹤的是 `hostPid`，host 死後就移除 session，手機端傳訊沒有路由目標。
+
+**Fix:** `~/.local/bin/fts new` 改用 tmux：
+
+```bash
+session="fts-codex-$ts"
+tmux_bin=$(command -v tmux || true)
+"$tmux_bin" new-session -d -s "$session" "exec \"$happy\" codex --yolo >>\"$log\" 2>&1"
+```
+
+**Verify:** 手動 tmux 啟動 `cms7t9cjety1xwc0uctgblool`，等待超過 40s stale cleanup 後：
+
+```text
+daemon list 仍含 cms7t9cjety1xwc0uctgblool pid=48404
+tmux list-sessions 仍含 fts-codex-20260731-015202
+ps -p 48404 顯示 happy/dist/index.mjs codex --yolo 存活
+```
+
+### 6.12 session 活著但傳訊無回應：卡在 MCP startup，模型請求根本沒送出
+
+**Symptom:** Happy app 對新 FTS session 傳訊後無回應。session/PID/tmux 都活，local MCP port 也在 listen，但 10 分鐘後 log 出現：
+
+```text
+[WARN] [CodexAppServer] Turn timed out after 600000ms — treating as abort
+```
+
+`strip-proxy /_proxy/status` 的 `ftsUpstreamQueue.lastStartAt` 沒更新，OmniRoute app.log 也沒有新請求。
+
+**Root cause:** 問題在 Codex 本地層，不在模型/OmniRoute。`2026-07-31-09-01-52` rollout 對應的 Happy log 顯示 turn 開始後啟動多個 MCP；其中 `repomix` 只有：
+
+```text
+mcpServer startup status: { name: 'repomix', status: 'starting' }
+```
+
+後續沒有 `ready` 也沒有 `failed`。Codex 等 MCP startup，永遠沒送出 Responses request，最後 Happy wrapper 600s timeout。`node_repl` / `openspace` 會明確 failed，非主因；`repomix` 是卡死點。
+
+**Fix:** FTS channel 不載入外部 MCP。`~/.local/bin/happy-codex-fts` 在 `codex` 子命令後附加：
+
+```bash
+-c mcp_servers.market-data.enabled=false
+-c mcp_servers.markitdown.enabled=false
+-c mcp_servers.mem0.enabled=false
+-c mcp_servers.node_repl.enabled=false
+-c mcp_servers.obsidian.enabled=false
+-c mcp_servers.openspace.enabled=false
+-c mcp_servers.repomix.enabled=false
+-c mcp_servers.smart_connections.enabled=false
+```
+
+`codex mcp remove` 不是正解：它回報 removed，但 `codex mcp list` 仍顯示這些 server enabled，因為來源是 `~/.codex/config.toml`，而不是 `~/.codex-fts/config.toml`。啟動層 `-c` 覆寫實測有效。
+
+**Verify:** `CODEX_HOME=/Users/51mini/.codex-fts codex mcp list -c ...` 顯示 8 個 server 全 `disabled`。重開 `cms893pf9pk09yc0ts2nykot8`，等待超過 40s stale cleanup 後仍在 daemon list；`ps -p 27055` 顯示啟動參數包含所有 MCP disable 覆寫。
