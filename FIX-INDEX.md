@@ -37,6 +37,11 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0014 | opencode-dispatch-protocol | opencode 派工協定 — argv 吞旗標掛死、stdin + --format json 串流監控 | opencode, dispatch, mannie, yargs, observability, harness |
 | 0015 | hermes-send-profile-identity | hermes send 用錯 bot 身分 — 切 profile 的變數是 HERMES_HOME 不是 HERMES_PROFILE | hermes,telegram,profile,send,mannie,koko,identity |
 | 0016 | agent-selfreport-file-vs-effect | 派工方自報「做完了」但只改了檔案沒讓它生效 — 驗收條文含指令就必須真的執行 | dispatch,acceptance,mannie,hermes,d1,cloudflare,migration,self-report |
+| 0017 | fts-context-compaction-loop | FTS context compaction — OmniRoute 免費池實測可用；HL 加 context 壓力監控與 compact-failed 止血 | fts, codex, compaction, context-window, harness, omniroute, observability |
+| 0018 | launchctl-bootstrap-race | launchctl bootout 後立即 bootstrap 發生 race | macos, launchctl, launchagent, hermes |
+| 0019 | mannie-agent-reach-skill-exposure | Mannie 看不到已安裝的 Agent Reach | mannie, hermes, agent-reach, skills |
+| 0020 | twitter-cli-search-timeout | twitter-cli search timeout／HTTP 404 — 未登入首頁使 ClientTransaction 初始化失敗 | twitter-cli, agent-reach, mannie, graphql, client-transaction, timeout |
+| 0021 | omniroute-claude-heavy-ab | OmniRoute Claude Heavy 純官方 A/B 分流 | omniroute, claude-code, heavy, profile, gateway |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.

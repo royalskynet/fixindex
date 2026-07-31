@@ -16,6 +16,11 @@ symptoms:
   - "OmniRoute auto/coding:free 路由到 opencode/big-pickle，輸出被 8192 截斷"
   - "opencode.json 的 limit.output 寫死 8192，換模型也沒用"
   - "Mannie 明明有 opencode 卻總是自己動手寫 code"
+  - "誤以為 OmniRoute auto/coding:free 是 NVIDIA NIM DeepSeek 優先、OpenRouter FREE fallback"
+  - "opencode 把 bash tool call 印成純文字，一個檔都沒建"
+  - "opencode 產出的 shell script 混進全形引號 ” 導致語法錯誤"
+  - "opencode 寫 bash 測試套件品質崩壞，寫 JS 卻一次過"
+  - "opencode reason=stop cost=0 但 git status 什麼都沒有"
 status: done
 supersedes: []
 related: [0012, 0016]
@@ -160,7 +165,9 @@ opencode 只能讀寫 workdir（啟動時的 cwd）底下的檔案。碰到外�
 | 改既有函式（明確規格） | ✅ | Stage A 一單過 28 項綠；respawn 模組 2 分鐘一單過，還多寫 2 項測試 |
 | 新建模組（有現成範本可抄） | ✅ | `harness-session-respawn.mjs` 照 `harness-doctor-run.mjs` 抄閘門結構，一次到位 |
 | 造多個小 fixture 檔 | ❌ | 啟動成本高過自己寫（3 分鐘手寫完成） |
-| 一次寫 >80 行新程式（如整套測試） | ✅（2026-07-31 修正後） | 原三連敗 `reason=length` 已定位為 model alias 選錯，非能力上限。改 `free-tools` 後實測 123 行測試檔一次 write 完成、24 項全綠。見 §8 |
+| 一次寫 >80 行新程式（如整套測試） | ✅（2026-07-31 修正後） | 原三連敗 `reason=length` 已定位為 model alias 選錯，非能力上限。改 `free-tools` 後實測 123 行測試檔一次 write 完成、24 項全綠。見 §8。**但分流依據應改看產出語言而非行數，見 §9** |
+| bash / shell 測試腳本 | ⚠️ | 兩輪都不合格：R1 tool call 退化成純文字零產出，R2 十個單行 bug。引號巢狀深度才是瓶頸，不是行數。派前必加 SECTION 0 樣板並預期主 session 收尾。見 §9 |
+| JS / TS / Python / SQL / JSON | ✅ | 同日同 combo 一次過：抽 SQL 模組 + `node:sqlite` 測試，14/14 綠、5 個呼叫點全換對。見 §9 |
 | 不可逆 live 操作 | ❌ | `launchctl kickstart`、刪 sentinel、`tmux kill-session` 一律主 session 執行 —— opencode 沒有 guard hook 保護 |
 
 ---
@@ -297,6 +304,36 @@ models 區塊同步改（**這處不改則前一處白改**）：
 
 **未觸發的判準（誠實記錄）**：本輪最大單步 `tokens_out=2416`，沒有實際超過 8192 的輸出。「天花板解除」是從兩個間接證據推的（client limit 已改 32768、路由不再落到 8192 硬頂的 big-pickle），未做直接壓測。
 
+---
+
+## §9 `auto/coding:free` 不是 NIM DeepSeek 優先 combo
+
+**Symptom:** 誤以為 OmniRoute `auto/coding:free` 會先走 NVIDIA NIM `deepseek-ai/deepseek-v4-pro`，失敗才 fallback 到 OpenRouter FREE；實際 call log 顯示它成功落到 `provider=opencode model=big-pickle`。
+
+**Root cause:** `auto/coding:free` 是 OmniRoute 執行期建立的 virtual auto-combo，會依 auto candidate 規則動態選模型；它不是固定的 DeepSeek→OR FREE 路由。固定「NIM DeepSeek V4 Pro primary，OpenRouter free tools fallback，第二組 NIM tail」的既有 combo 名稱是 `free-tools-heavy`。
+
+**Fix:** 需要該固定順序的 Hermes profile，將主模型改成：
+
+```yaml
+model:
+  default: free-tools-heavy
+  provider: omniroute
+  base_url: http://127.0.0.1:20129/v1
+```
+
+同步更新 profile 的 model-check，不再檢查 `auto/coding:free`。`free-tools-heavy` 當前順序：
+
+1. NVIDIA NIM `deepseek-ai/deepseek-v4-pro`
+2. OR FREE `nvidia/nemotron-3-ultra-550b-a55b:free`
+3. OR FREE `nvidia/nemotron-3-super-120b-a12b:free`
+4. OR FREE `cohere/north-mini-code:free`
+5. OR `openrouter/free`
+6. 第二組 NVIDIA NIM `deepseek-ai/deepseek-v4-pro`
+
+**Verify:** 查 `~/.omniroute/storage.sqlite` 的 `combos.data` 確認步驟順序；送一次 `model=free-tools-heavy` completion，再查 `call_logs`。2026-07-31 實測第一跳 NIM 回 `429`，下一跳 `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` 回 `200`，證明 fallback 生效。Hermes gateway 重啟後，`config.yaml` 顯示 `model.default=free-tools-heavy`，profile model-check 回 PASS。
+
+**Retrospective:** 不從 alias 名稱推測路由。先查 live SQLite combo 定義，再用 `call_logs.requested_model/model/provider/combo_step_id` 驗證實際路徑。
+
 ### 附帶收穫
 
 - **fallback 活體證據**：06:36:42 NIM 回 `Stream produced no non-ping SSE event within 20000ms`，fill-first 自動切 step 2 `openrouter/nvidia/nemotron-3-super-120b-a12b:free` —— 寫整份測試檔那筆 2416 輸出就是它完成的。
@@ -306,3 +343,103 @@ models 區塊同步改（**這處不改則前一處白改**）：
 ### 教訓
 
 `reason=length` 出現時，第一件事是查 `call_logs` 的 `tokens_out` 跟 client config 的 `limit.output`，**不是**去改任務單。輸出截斷永遠先查上限設定，不查 prompt 工程。這是 `feedback_debug_verify_first`（先驗配置與實際請求，模型永遠擺最後）的又一個案例 —— §7 花了三輪去調 prompt，正解是兩個數字。
+
+---
+
+## §9 語言別品質落差：同一個 combo，寫 JS 一次過，寫 bash 兩輪崩（2026-07-31）
+
+§8 解除 8192 天花板後，同日派了三份任務驗證實戰品質。結果差距極大，而且**不是任務大小造成的**。
+
+| 任務 | 產出語言 | 事件數 | 輪次 | 結果 |
+|---|---|---|---|---|
+| B：Worker SQL 抽模組 + `node:sqlite` 測試 | JS / SQL | 142 | 1 | **一次過**，14/14 綠，5 個 SQL 呼叫點全換對，兩條指定不動的 INSERT 沒動 |
+| A：runner.sh 回歸測試套件 | bash | 9 → 49 | 2（都不合格） | R1 零產出；R2 產出檔案但 10 個 bug |
+
+三次 `step_finish` 全是 `reason=stop`、`cost=0`。**沒有任何錯誤訊號** —— 失敗完全靠主 session 複驗才看得到。
+
+### R1 失敗模式：tool call 退化成純文字
+
+事件流只有 3 筆有效內容：
+
+```
+TOOL bash {'command': 'mkdir -p test'}
+TOOL bash {'command': 'cat runner.sh'}
+TEXT {"command": "mkdir -p test && cat > test/run-tests.sh << 'EOF'\n#!/bin/bash\n..."
+```
+
+第三筆該是 `tool_use`，模型卻把整個 tool call 的 JSON **印成 `text`**。opencode 收到的是一段文字，不是工具呼叫，所以什麼都沒執行。`git status --short` 空的，`test/` 是空目錄。
+
+同一段文字裡還混進全形引號：`echo "OK: $*\”` —— `”` 在 bash 是語法錯誤。
+
+**觸發條件推測**：模型想用單一巨大 heredoc（`cat > f << 'EOF' … EOF`）寫一整份 bash 測試檔。bash 測試碼本身塞滿 `"`、`'`、`\`，再包進 heredoc、再包進 JSON tool 參數 —— 三層跳脫疊起來，模型在中途丟失結構，退回吐文字。
+
+### R2：加了「怎麼寫檔」的前置規範才產出檔案
+
+任務單最前面插一段 SECTION 0：
+
+```
+1. 用 write 工具建檔，NOT bash、NOT cat、NOT heredoc、NOT echo。
+2. 只准 ASCII 引號 " 和 ' ，禁止 “ ” ‘ ’ 與 Unicode dash。
+3. 可以分批：先寫 test 1-4，跑一次，再用 edit 追加 5-8。不要一次求完美。
+4. 每次 write / edit 之後立刻跑 bash -n，有語法錯先修再往下加。
+5. 測試腳本不准用 set -e（斷言失敗不能中止整輪）。
+```
+
+檔案這次有了，`bash -n` 也過，但跑起來 exit 1。10 個缺陷：
+
+| 類別 | 實例 |
+|---|---|
+| `set -u` 違反 | `echo "Test 1: ... $MEM"` —— `$MEM` 此時未定義，直接 `unbound variable` |
+| 抽取錨點錯 | `grep -E '^(IMG_PROMPT\|TEXTOUT)=' ` —— 目標行在 runner.sh 縮排 4 空白，`^` 永不命中 |
+| 拼字 | `freel "..."` 應為 `fail` |
+| sed 語法 | `sed -n '/^    if .../$/^    fi$/p'` —— range 分隔應為 `,` 不是 `/` |
+| 引用不存在的變數 | 宣告 `LITERAL_BSLASH_QUOTE`，使用 `$LITERAL_BSLASH_APOTE` |
+| 作用域 | test 8 包在 `( … )` 子 shell，`PASS`/`FAIL` 計數器改動被丟棄 |
+| 自相矛盾 | 期望 `TEXTOUT == "hello dog] tail"`，下一行卻斷言 `TEXTOUT` 不含 `]` |
+
+全部是單行層級。依 `SOUL.md` 派工門檻（單檔 < 30 行自己動手）主 session 收尾，沒派第三輪。
+
+### 判準：不看行數，看引號巢狀深度
+
+原本 §4 的適用性表按「一次寫幾行」分流。§8 已推翻輸出上限那條，**§9 再推翻一次分流依據**：
+
+| 產出型態 | 派 opencode | 理由 |
+|---|---|---|
+| JS / TS / Python / SQL / JSON / Markdown | ✅ | 引號單層，工具參數不需巢狀跳脫 |
+| **bash / zsh 測試腳本、含 heredoc 的 shell** | ⚠️ 派前先加 SECTION 0，且預期要收尾 | 測試碼含 `"` `'` `\`，包進 heredoc 再包進 JSON = 三層跳脫 |
+| perl / awk / sed 單行 regex 密集 | ⚠️ 同上 | 分隔符與跳脫衝突 |
+
+派 shell 任務時，SECTION 0 那五條當固定樣板貼上去。
+
+### 產出測試套件時必加的兩道自檢
+
+複驗「模型寫的測試」時，測試全綠**不代表測試有效**。兩個實際救回問題的手法：
+
+**1. 抽空守衛。** R2 的測試用 `sed`/`grep` 從真 runner.sh 抽片段再 `eval`。抽不到 → 空字串 → `eval ""` 什麼都不做 → 後面的斷言**假性全綠**。所以每個抽取器前面加一條檢查：
+
+```bash
+for fn in extract_mem_block extract_agent_block extract_img_lines extract_fallback; do
+  if [ -z "$($fn)" ]; then
+    fail "extract:$fn" "anchor did not match anything in $RUNNER — the tests cannot run"
+  else
+    ok "extract:$fn"
+  fi
+done
+```
+
+**2. 突變測試。** 把被測檔路徑做成可覆寫（`RUNNER="${RUNNER:-<預設>}"`），造幾個把已知舊 bug 塞回去的變體，確認測試會紅：
+
+```
+變體 m1（塞回舊的 $'...' memory 拼接）  → 5 條紅
+變體 m2（regex 拿掉 \]? ）             → 2 條紅
+變體 m3（明文 SECRET 寫回去）          → 3 條紅
+乾淨版                                  → 30/30 綠，exit 0
+```
+
+三個變體都被抓到才算證明測試有效。這比「測試全綠」強得多 —— 全綠也可能是斷言根本沒執行。
+
+### 教訓
+
+- `reason=stop` + `cost=0` **不是成功訊號**，只代表模型認為自己講完了。判斷成功一律看 `git status --short` 加實跑驗收指令。
+- 派工失敗要先分類是**能力問題**還是**輸出通道問題**。R1 不是不會寫 bash，是 tool call 序列化崩掉 —— 換寫法（write 工具取代 heredoc）就解決一半，換模型不會。
+- 模型寫的測試要當成「未經審查的程式碼」看待，不是「驗收工具」。它自己也要被驗。
