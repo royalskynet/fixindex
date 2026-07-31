@@ -12,6 +12,12 @@ symptoms:
   - "ERROR: Missing environment variable: `OMNIROUTE_API_KEY`."
   - "fts new 不帶 prompt 噴 unbound variable"
   - "fts new 帶初始 prompt 開了 session 但停在 Waiting for messages..."
+  - "Not inside a trusted directory and --skip-git-repo-check was not specified."
+  - "harness 踢了 session 但目標 rollout 完全沒被推進，logs/session-resume-*.log 是 0 bytes"
+  - "warning: This session was recorded with model `gpt-5.4` but is resuming with `gpt-5.5`"
+  - "warning: Ignored unsupported project-local config keys in /Users/51mini/.codex/config.toml"
+  - "tmux send-keys 到 fts session 回 rc=0 但 rollout 毫無變化"
+  - "tmux capture-pane 對 fts-codex-* session 抓到全空白"
 status: active
 supersedes: []
 related: [0010, 0009]
@@ -52,8 +58,11 @@ ERROR: Missing environment variable: `OMNIROUTE_API_KEY`.
 set -a; . /Users/51mini/.creds/omniroute/codex-fts.env; set +a
 export CODEX_HOME=/Users/51mini/.codex-fts
 cd <session 的 cwd，從 rollout 首行 session_meta 讀>
-codex exec resume <session-id> "<prompt>"
+codex exec resume --skip-git-repo-check -c model="gpt-5.4" <session-id> "<prompt>"
 ```
+
+**兩個旗標缺一不可，原因見 §7。**（本段原本沒有這兩個旗標，2026-07-31 補上——舊版指令在 cwd 是
+`$HOME` 時會直接被拒絕執行，或執行成功但走到付費模型。）
 
 **無效嘗試：** 只設 `CODEX_HOME=/Users/51mini/.codex-fts`——那只換 profile 目錄，不帶 key。
 
@@ -136,3 +145,138 @@ ASSIGNMENT/SELF-CHECK 分流的 session-scan 分支（既有 18 條 fixture 全�
 §1 修好後真的注入成功（該 turn 燒了 929k tokens），但 session 回應完**三項任務仍然零完成**
 ——又是一次「宣告→停」。單靠注入救不回已經進入這個模式的 session，最後是另派 agent 直接做完。
 這反過來佐證 layer1.8 的必要性：要在它第一次「宣告下一步就收工」時就 block，而不是事後補救。
+
+---
+
+## §7 踢醒送不到的兩個真根因：cwd 是 $HOME
+
+2026-07-31 實測。harness 用 rollout `session_meta.cwd` 當工作目錄，而 FTS session 的 cwd 多半是
+`/Users/51mini`。這一件事同時觸發兩個獨立故障。
+
+### §7.1 非 git repo → codex 直接拒絕執行
+
+**Symptom**
+
+```
+Not inside a trusted directory and --skip-git-repo-check was not specified.
+```
+
+harness 端的表現是「踢了但目標 rollout 完全沒被推進」，`kickFailedStreak` 一路累加。
+**在 `logs/session-resume-<sid>.log` 是 0 bytes 的時期完全看不到這行**——先修好 spawn
+（`stdio: ['ignore', fd, fd]`，見 §7.3）讓 log 寫得出東西，錯誤才浮出來。
+
+**Root cause**
+
+`codex exec` 預設要求 cwd 是受信任目錄（git repo）。`$HOME` 不是，直接拒絕，連 session 都不查。
+
+**Fix** — 加 `--skip-git-repo-check`。
+
+**Verify**（便宜，不燒 token：用不存在的 session id 只驗閘門）
+
+```bash
+cd /Users/51mini
+codex exec resume 00000000-0000-0000-0000-000000000000 "x"
+#   → Not inside a trusted directory ...
+codex exec resume --skip-git-repo-check 00000000-0000-0000-0000-000000000000 "x"
+#   → Error: no rollout found for thread id ...   ← 閘門已放行
+```
+
+### §7.2 `~/.codex/config.toml` 被當 project-local config → 漏到付費模型
+
+**Symptom**
+
+```
+warning: This session was recorded with model `gpt-5.4` but is resuming with `gpt-5.5`.
+warning: Ignored unsupported project-local config keys in /Users/51mini/.codex/config.toml
+```
+
+**Root cause**
+
+cwd 是 `$HOME` 時，`~/.codex/config.toml` 就成了 codex 眼中的 **project-local config**，
+其 `model = "gpt-5.5"` 蓋掉 `CODEX_HOME=~/.codex-fts` 的 `model = "gpt-5.4"`。
+
+`happy-codex-fts` wrapper 靠 `CODEX_HOME` 做渠道隔離，**擋不住 cwd 帶進來的覆蓋**。
+後果照 wrapper 自己的註解：`codex/*` = 真金錢，且被 key allowlist 擋 403。harness 每踢一次漏一次。
+
+**Fix** — 顯式釘 model，讓 project-local 蓋不掉。動態讀 fts config 免得日後漂移：
+
+```js
+function ftsModel() {
+  try {
+    const m = fs.readFileSync(path.join(CODEX_FTS_HOME, 'config.toml'), 'utf8')
+      .match(/^\s*model\s*=\s*"([^"]+)"/m);
+    if (m) return m[1];
+  } catch {}
+  return 'gpt-5.4';
+}
+// codex exec resume --skip-git-repo-check -c model="$6" "$4" "$5"
+```
+
+**Verify** — warning 方向對調就是鐵證：
+
+```
+修前：recorded with gpt-5.4 but resuming with gpt-5.5   ← 漏了
+修後：recorded with gpt-5.5 but resuming with gpt-5.4   ← 覆蓋成功
+新增段落 model 分布：4 × gpt-5.4，零 gpt-5.5
+```
+
+### §7.3 為什麼這兩個 bug 藏了這麼久
+
+踢醒的 spawn 原本是 `stdio: ['ignore','pipe','pipe']` + `child.unref()`。父進程（poll）一退出就
+扯斷 pipe，子進程寫 stdout 拿 EPIPE 當場死 → **log 檔 0 bytes**。錯誤訊息全部被吞掉。
+
+改成 fd-backed 就好：
+
+```js
+const fd = fs.openSync(logFile, 'a');
+const child = spawn('/bin/bash', [...], { detached: true, stdio: ['ignore', fd, fd] });
+child.unref();
+fs.closeSync(fd);
+```
+
+**Rule：踢醒/注入這類 fire-and-forget 子進程，stdout/stderr 一定要落檔，而且落檔要用 fd 不用 pipe。**
+否則所有故障都長成同一張臉（「踢了沒反應」），沒有任何線索可查。
+
+---
+
+## §8 已證偽的三個認知（別再照舊的想）
+
+| 舊認知 | 實測結果 |
+|---|---|
+| `codex exec resume` 本身正常，問題在 spawn | **錯**。當初兩次實測都在 `omniroute-free-tools`（git repo）裡跑，條件沒對齊 harness 實際路徑（cwd=`$HOME`）。spawn 只是遮住錯誤的那層 |
+| resume 會另開一份新 rollout，所以送達偵測不可能成立 | **錯**。resume 是 **append 回原檔**。實測 45495→99462→124616 bytes、目錄檔數維持 19、`HARNESS_KICK_OK` 就落在原 rollout。比對原檔 `lastTaskStartedTs > lastKickMs` 的送達偵測架構正確 |
+| resume 固定燒 682k tokens，貴到必須換管道 | **錯**。成本隨 rollout 大小線性成長。427KB 的大 session 量到 682k、929k；45KB 的小 session 只花 **28,463**。仍需要 `MAX_KICKS_PER_SESSION` 上限，但沒有急到要換管道 |
+
+## §9 死路：tmux send-keys 不能當踢醒管道
+
+**動機**（已作廢）：活著的 app-server 記憶體裡已有 context，`send-keys` 送一行應該比 resume 重放
+整份 context 便宜兩個數量級。
+
+**為什麼不行**
+
+FTS session 的 tmux pane 跑的不是 codex REPL：
+
+```
+tmux new-session -d -s fts-codex-<ts> exec "happy-codex-fts" codex --yolo >>"<log>" 2>&1
+  └─ node happy/dist/index.mjs codex --yolo
+      └─ codex ... app-server --listen stdio://
+```
+
+stdout 被 `>>` 導進 log 檔，`tmux capture-pane` 全空——沒有 TUI。pane 後面是 **JSON-RPC over stdio**，
+不是可打字的提示符。`send-keys` 的 `rc=0` 只代表 tmux 收下按鍵，跟 app-server 有沒有收到無關。
+
+**實測**：送出探針後 rollout 零變化（size/mtime 都沒動），且該 tmux session 在數分鐘內整個消失
+（`no server running`）。無法證明是 send-keys 殺的，但時間點高度相關。**代價是一個活 session。**
+
+**配對方法本身是可行的**（若日後有別的用途）—— log 檔沒有 session id、時間戳也對不上
+（tmux 建於 10:32:46、rollout 是 10:40:15），但 `lsof` 反查可靠：
+
+```bash
+lsof -t -- <rollout.jsonl>            # → 持有它的 codex app-server pid
+# 往上走 ppid 直到撞到 tmux list-panes -a -F '#{session_name} #{pane_pid}' 裡的 pane_pid
+```
+
+**但有個陷阱**：同一個 app-server 可能同時開著**多份** rollout（實測 pid 52423 同時持有 `019fb60b`
+和 `019fb656`，前者 mtime 已停在 12:22、後者 12:34）。所以 `processAlive === true` **不等於**
+「這個 session 是活的」——舊 rollout 只是還沒被關檔。要判斷「app-server 當前在哪個 session」，
+得取同一 holder pid 持有的 rollout 中 mtime 最新那份。這條尚未實作。
