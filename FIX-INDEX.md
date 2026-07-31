@@ -36,6 +36,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0013 | novelvault-migo-cleanup | TODO |  |
 | 0014 | opencode-dispatch-protocol | opencode 派工協定 — argv 吞旗標掛死、stdin + --format json 串流監控 | opencode, dispatch, mannie, yargs, observability, harness |
 | 0015 | hermes-send-profile-identity | hermes send 用錯 bot 身分 — 切 profile 的變數是 HERMES_HOME 不是 HERMES_PROFILE | hermes,telegram,profile,send,mannie,koko,identity |
+| 0016 | agent-selfreport-file-vs-effect | 派工方自報「做完了」但只改了檔案沒讓它生效 — 驗收條文含指令就必須真的執行 | dispatch,acceptance,mannie,hermes,d1,cloudflare,migration,self-report |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.

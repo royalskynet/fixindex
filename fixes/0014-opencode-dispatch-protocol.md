@@ -18,7 +18,7 @@ symptoms:
   - "Mannie 明明有 opencode 卻總是自己動手寫 code"
 status: done
 supersedes: []
-related: [0012]
+related: [0012, 0016]
 ---
 # 0014 opencode 派工協定
 
