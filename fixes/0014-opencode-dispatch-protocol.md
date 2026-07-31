@@ -156,7 +156,7 @@ opencode 只能讀寫 workdir（啟動時的 cwd）底下的檔案。碰到外�
 | 改既有函式（明確規格） | ✅ | Stage A 一單過 28 項綠；respawn 模組 2 分鐘一單過，還多寫 2 項測試 |
 | 新建模組（有現成範本可抄） | ✅ | `harness-session-respawn.mjs` 照 `harness-doctor-run.mjs` 抄閘門結構，一次到位 |
 | 造多個小 fixture 檔 | ❌ | 啟動成本高過自己寫（3 分鐘手寫完成） |
-| 一次寫 >80 行新程式（如整套測試） | ❌ | 三連敗 `reason=length`，見 §7 |
+| 一次寫 >80 行新程式（如整套測試） | ✅（2026-07-31 修正後） | 原三連敗 `reason=length` 已定位為 model alias 選錯，非能力上限。改 `free-tools` 後實測 123 行測試檔一次 write 完成、24 項全綠。見 §8 |
 | 不可逆 live 操作 | ❌ | `launchctl kickstart`、刪 sentinel、`tmux kill-session` 一律主 session 執行 —— opencode 沒有 guard hook 保護 |
 
 ---
@@ -177,11 +177,14 @@ Mannie 側該改的：
 - respawn 功能已由 opencode 落地並複驗（單元 5 項新測試全綠、dry-run 乾淨、範圍無越界）
 - `opencode-watch.mjs` 已收進 `omniroute-free-tools/scripts/`（原 scratchpad 版本 `ocwatch.mjs` 作廢）
 - FTS harness 一期 + A2 + A3 全部結案：spawn 送達修復、`kick-not-delivered` 反假成功、lsof 減半、premature 門檻 argv 化、7 項 premature 單元測試（總 39 項綠）
-- Mannie 側改造未做
+- ~~Mannie 側改造未做~~ → **2026-07-31 複查：§5 三項其實都已落地**。`~/.hermes/profiles/mannie/skills/mannie-opencode-worker/SKILL.md` 已是 stdin 餵 prompt + `--format json` 落檔 + `2> err.log` + 180s 無新事件判掛死
+- 2026-07-31：`reason=length` 根因定位並修復，見 §8
 
 ---
 
 ## §7 `reason=length` — 天花板是單次輸出量，不是任務項數
+
+> **2026-07-31 更正：本節的歸因是錯的。** 真因是 model alias 選錯 + config 寫死 `output: 8192`，不是 opencode 或任務單寫法的問題。下面整節保留當時的推論過程，正確答案見 **§8**。
 
 **Symptom**
 

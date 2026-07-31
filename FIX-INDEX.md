@@ -23,7 +23,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 |----|------|-------|------|
 | 0001 | coco-monday-weekly-schedule-night-shift-notify | TODO |  |
 | 0002 | omniroute-fts-tail-nim-fallback | OmniRoute FTS combo tail NIM fallback | omniroute, fts, combo, nvidia-nim, launchd, timeout, readiness |
-| 0003 | heath-bot-silent-pkill-missed-rescue | Heath bot 靜默 20 天 — pkill 廣域 pattern 誤殺後漏救 | token-401,session-not-found,session-store,heath,wellally,tg-bridge,launchd,pkill,fix-0179 |
+| 0003 | heath-bot-silent-pkill-missed-rescue | Heath bot 靜默 20 天 — pkill 廣域 pattern 誤殺後漏救 |  |
 | 0004 | fts-dispatch-not-in-slash-menu | "fts codex `/dispatch` 不出現在斜線選單——prompt 放在 Happy 不掃的目錄" | "codex-fts", "happy", "dispatch", "skill-system" |
 | 0005 | codex-novelvault-agents-integration | TODO |  |
 | 0006 | mini-power-failure-vdd-boost-uvlo | Mini 突然斷電重啟 — 供電壓降 UVLO |  |
@@ -35,6 +35,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0012 | fts-harness-selfheal-online | FTS harness 自癒閉環上線 — 假警報止血、空轉 turn 偵測、doctor/layer1.8 啟用 | fts, harness, launchd, telegram, acceptance-gate, opencode, codex, self-heal |
 | 0013 | novelvault-migo-cleanup | TODO |  |
 | 0014 | opencode-dispatch-protocol | opencode 派工協定 — argv 吞旗標掛死、stdin + --format json 串流監控 | opencode, dispatch, mannie, yargs, observability, harness |
+| 0015 | hermes-send-profile-identity | hermes send 用錯 bot 身分 — 切 profile 的變數是 HERMES_HOME 不是 HERMES_PROFILE | hermes,telegram,profile,send,mannie,koko,identity |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
