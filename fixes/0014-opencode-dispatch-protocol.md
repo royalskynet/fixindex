@@ -12,6 +12,10 @@ symptoms:
   - "opencode 事件流出現 STEP-END reason=length，任務零產出、git status 沒有任何改動"
   - "opencode 只讀了幾個檔就 reason=length 結束，一行程式都沒寫"
   - "任務單已經拆到三項以內，opencode 還是 reason=length 掛掉"
+  - "opencode reason=length 的 tokens_out 每次都精準等於 8192"
+  - "OmniRoute auto/coding:free 路由到 opencode/big-pickle，輸出被 8192 截斷"
+  - "opencode.json 的 limit.output 寫死 8192，換模型也沒用"
+  - "Mannie 明明有 opencode 卻總是自己動手寫 code"
 status: done
 supersedes: []
 related: [0012]
@@ -224,3 +228,81 @@ git status --short                                          # 確認零殘留
 
 `reason=length` 出現就是**零產出**，不要去猜「是不是做了一半」。三次實測都是完全沒動檔案。
 
+
+---
+
+## §8 `reason=length` 真因 — model alias 選錯 + config 寫死 output 8192
+
+日期：2026-07-31 下午。**§7 的歸因錯誤，此節為正解。**
+
+### Symptom
+
+同 §7：`STEP-END reason=length`、零產出、`git status` 乾淨、`err.log` 空白。
+
+### Root cause（兩層疊加，同值 8192 所以看起來像同一件事）
+
+**第一層 — client 端寫死上限。** `~/.config/opencode/opencode.json` 的 provider models 區塊：
+
+```json
+"models": { "auto/coding:free": { "limit": { "context": 1048576, "output": 8192 } } }
+```
+
+opencode 拿這個 `limit.output` 當 `max_tokens` 送上游。**不管換什麼模型都會在 8192 截斷。**
+
+**第二層 — model alias 路由到 8192 硬頂的模型。** `model` 設的是 `omniroute/auto/coding:free`。`auto/*` 是 OmniRoute 的 **virtual auto-combo**（`open-sse/services/autoCombo/`），每次請求動態挑候選，實測落到 OmniRoute 的 `opencode` 上游連線、model `big-pickle`。
+
+`~/.omniroute/storage.sqlite` 的 `call_logs` 是決定性證據 —— `reason=length` 那幾筆 `tokens_out` 精準等於 8192：
+
+```
+2026-07-31T05:32:37  requested=auto/coding:free -> provider=opencode  model=big-pickle  tokens_out=8192
+2026-07-31T04:57:25  requested=auto/coding:free -> provider=opencode  model=big-pickle  tokens_out=8192
+```
+
+跟任務項數、任務單寫法、讀了幾個檔**全部無關**。§7 那三條「已否決的修法」之所以無效，是因為它們都在調整輸入，而瓶頸在輸出上限。
+
+### Fix
+
+`~/.config/opencode/opencode.json`（備份留在 `opencode.json.bak-20260731`）：
+
+```diff
+- "model": "omniroute/auto/coding:free",
+- "small_model": "omniroute/auto/coding:free",
++ "model": "omniroute/free-tools",
++ "small_model": "omniroute/free-tools-nim",
+```
+
+models 區塊同步改（**這處不改則前一處白改**）：
+
+```json
+"free-tools":     { "name": "OmniRoute Free Tools (15-step fallback)", "limit": { "context": 128000, "output": 32768 } },
+"free-tools-nim": { "name": "OmniRoute Free Tools NIM (2-step)",       "limit": { "context": 128000, "output": 32768 } }
+```
+
+`baseURL`（`http://127.0.0.1:20128/v1`）、`apiKey`、`timeout`、`chunkTimeout` 不動。
+
+**為什麼 output 設 32768**：`free-tools` 15 步全鏈最小輸出上限就是 32768（gpt-oss-20b / ling-3.0-flash / laguna / gemma-4 系列），設更高會在 fallback 到這些步時被上游拒。
+
+**為什麼不改走 strip-proxy :20129**：`omniroute-free-tools/docs/gotchas.md` #7 那條是給 Anthropic-format client 做 model 名 strip 用的，opencode 是 OpenAI-compat 送真實 combo 名，不需要。反而 `strip-proxy/server.mjs:28-29` 有全域序列化閘門 `FTS_UPSTREAM_MAX_CONCURRENT=1` + `FTS_UPSTREAM_MIN_GAP_MS=2500`，opencode 一輪數十次 tool call 塞進單槽會 head-of-line block 掉正在跑的 FTS session。
+
+### 免費層與 fallback 查證
+
+`free-tools` = `fill-first` 15 步。`/v1/models` 逐一查：15 步 `pricing.prompt` / `pricing.completion` 皆 `null`、`tool_calling` 皆 `true`、最小 `max_output_tokens` 32768。上游只有 NVIDIA NIM free entitlement 與 OpenRouter `:free`。`api_key_token_limits` / `provider_key_limits` 皆空表。
+
+### Verify（2026-07-31 實測，四關）
+
+1. `curl :20128/v1/chat/completions -d '{"model":"free-tools",...}'` → `X-OmniRoute-Provider: nvidia`、`X-OmniRoute-Model: deepseek-ai/deepseek-v4-pro`、`X-OmniRoute-Response-Cost: 0.0000000000`、`strategy=fill-first`
+2. `printf 'reply exactly: FT_STDIN_OK' | opencode run --format json` → `reason=stop`、`cost=0`
+3. **回歸測試**：git repo 內 stdin 派「為 3 個函式寫 >=24 項單元測試」。結果 **123 行測試檔一次 write 完成（`out=2416`）**，自跑 `node --test` 抓到 3 項失敗後自行 edit 修正，最終 `reason=stop`、24 pass / 0 fail、`git status` 只有 `?? test/`（白名單內零越界）、`err.log` 空
+4. `call_logs` 事後查：13 筆全 `provider=nvidia|openrouter`、`combo_name=free-tools`/`free-tools-nim`、**`big-pickle` 零筆**、全 `cost=0`
+
+**未觸發的判準（誠實記錄）**：本輪最大單步 `tokens_out=2416`，沒有實際超過 8192 的輸出。「天花板解除」是從兩個間接證據推的（client limit 已改 32768、路由不再落到 8192 硬頂的 big-pickle），未做直接壓測。
+
+### 附帶收穫
+
+- **fallback 活體證據**：06:36:42 NIM 回 `Stream produced no non-ping SSE event within 20000ms`，fill-first 自動切 step 2 `openrouter/nvidia/nemotron-3-super-120b-a12b:free` —— 寫整份測試檔那筆 2416 輸出就是它完成的。
+- **模型會抓任務單的規格錯誤**：任務單寫「`clamp(Infinity)` 回 hi」，模型跑測試失敗後自己推出 `Number.isFinite(Infinity) === false` 所以應回 `lo`，並修正測試。免費池不代表笨。
+- **驗收指令自己也要驗**：主 session 用 `node --test test/` 複驗回 `fail 1`，一度誤判 opencode 自報造假。真因是 Node v25 把 `test/` 當模組路徑解析（`MODULE_NOT_FOUND`），改 `node --test test/validate.test.mjs` 就 24 綠。**複驗指令跟被驗程式一樣會有 bug。**
+
+### 教訓
+
+`reason=length` 出現時，第一件事是查 `call_logs` 的 `tokens_out` 跟 client config 的 `limit.output`，**不是**去改任務單。輸出截斷永遠先查上限設定，不查 prompt 工程。這是 `feedback_debug_verify_first`（先驗配置與實際請求，模型永遠擺最後）的又一個案例 —— §7 花了三輪去調 prompt，正解是兩個數字。
