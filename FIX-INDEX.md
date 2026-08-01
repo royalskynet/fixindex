@@ -42,6 +42,13 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0019 | mannie-agent-reach-skill-exposure | Mannie 看不到已安裝的 Agent Reach | mannie, hermes, agent-reach, skills |
 | 0020 | twitter-cli-search-timeout | twitter-cli search timeout／HTTP 404 — 未登入首頁使 ClientTransaction 初始化失敗 | twitter-cli, agent-reach, mannie, graphql, client-transaction, timeout |
 | 0021 | omniroute-claude-heavy-ab | OmniRoute Claude Heavy 純官方 A/B 分流 | omniroute, claude-code, heavy, profile, gateway |
+| 0022 | heavy-hl-degenerate-circuit | Heavy HL agentic 退化、OmniRoute round-robin 飄移與 NIM 本機 queue timeout | omniroute, claude-code, heavy-hl, openrouter, nvidia-nim, circuit-breaker, launchd |
+| 0023 | omniroute-dual-lane-rate-limit | OmniRoute NIM/OR 集中消耗、短冷卻重探與 ALL_ACCOUNTS_INACTIVE | omniroute, hermes, nvidia-nim, openrouter, rate-limit, routing |
+| 0024 | mannie-compression-dead-model | Hermes 壓縮模型下架導致壓縮完全停擺、主模型 context 被 probe-down 猜錯 | hermes, mannie, compression, openrouter, omniroute, auxiliary, context-length |
+| 0025 | omniroute-anomalyidcounter-runtime-crash | TODO |  |
+| 0026 | launchd-env-var-expansion-empty-string | TODO |  |
+| 0027 | fail-open-static-checker | TODO |  |
+| 0028 | mannie-silent-amnesia-compression-chain | Agent 靜默失憶：壓縮鏈五重複合失效（context 砍半 + target_ratio 語意誤解 + 摘要模型過慢 + fallback 死路 + 靜默丟中段） | hermes, mannie, compression, context, auxiliary, fallback, omniroute, lsp, mcp, toolset |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.

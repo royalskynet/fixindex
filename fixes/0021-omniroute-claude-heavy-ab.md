@@ -14,6 +14,10 @@ symptoms:
   - "Happy Heavy 背景啟動命令需要縮短為 heavy claude"
   - "heavy claude 回 status=starting 且 Happy 看不到新 session，log 顯示 env: node: No such file or directory"
   - "free-tools-heavy 對哈囉回傳 skills 與 system-reminder，發生 prompt leakage"
+  - "Heavy NIM 回覆先出現孤立 </system-reminder> 再夾帶舊 loop context，需獨立透明 HL 阻斷"
+  - "兩個 Heavy Happy session 持續強制開啟，launchd submitted job 顯示 properties = keepalive"
+  - "Mannie free-tools-heavy 指向停用的 20129，連線失敗後誤報 Provider authentication failed / Missing Authentication header"
+  - "OmniRoute 20128/20130 已回 HTTP 200，但 Mannie custom:omniroute 仍標 exhausted"
 status: active
 supersedes: []
 related: []
@@ -89,3 +93,31 @@ related: []
 **Fix:** 本節只調查，未改 route 或 session。若要求模型穩定，應固定單一已驗證 model；若要求最大可用性，才使用 OR combo並接受跨 step 品質漂移。
 **Verify:** OR one-shot 的 step 1 `nemotron-3-ultra-550b...:free` 回 HTTP 200 但 content null、0 tokens，隨即改用 step 2 `nemotron-3-super-120b...:free` 完成 title 與主回覆；手機 remote turn實際落 step 3 `cohere/north-mini-code:free`。三者皆由 `comboStepId` 與 gateway raw response確認。
 **Retrospective:** 「fallback 正常」只代表能找到可回應 upstream，不代表同一品質、同一模型或不洩漏 prompt；A/B 測試不可把 combo 當固定模型。
+
+## §11 獨立 Heavy HL 20130 透明上線
+**Symptom:** Heavy session `fa1dd0dc-6c8d-432e-9d87-57e906ddbb14` 的 provider 回覆先出現孤立 `</system-reminder>`，後面又夾帶舊 `/loop` Job `8fa46ef7-9f02-4c22-b384-d97b55607f44` 與「友伴闲談」；舊 FTS HL 在 `20129` 有 contamination gate，但 Heavy 直接走 `20128` 完全繞過。
+**Root cause:** NVIDIA DeepSeek V4 Pro 在長 Claude Code/Happy prompt 下產生 prompt/context echo；OmniRoute 因 HTTP 200 與非空 content 視為成功。舊 `hasOrphanHarnessClose()` 只檢查回覆中是否完全沒有 opening tag，「孤立 close 早於後續完整 tag block」會逃過偵測。
+**Fix:** 新增 `HL_MODE=heavy-transparent` 與獨立 launchd `com.royalskynet.heavy-hl`，以 `20130 -> 20128` 透明轉發 `/v1/messages`，不注入 `SYSTEM_INSTRUCTION`。修正 orphan detector：第一個 close 早於 open，或 close 數大於 open 即判污染。SSE/非串流均在送 client 前完整 gate，最多重試 2 次；10 分鐘內 2 次 fail-loud 後開 10 分鐘 circuit breaker。Heavy profiles、Happy worker 與 `claude-heavy` 改指 `20130`。停用舊 `20129` launchd、FTS harness poll 與 watchdog cron，plist 改名保留可回滾。
+**Verify:** `test-heavy-mode.mjs` 驗證 byte-for-byte request、SSE/非串流目標污染不外洩、重試上限與 circuit block；`test-degenerate-gate.mjs` 全過。launchd 顯示 `com.royalskynet.heavy-hl state=running`，`127.0.0.1:20130` 唯一監聽，`/_proxy/status` 回 `mode=heavy-transparent`、`upstream=http://127.0.0.1:20128`；`20129` 無 listener。
+**Retrospective:** 獨立 A/B harness 只做可決定性轉換與品質 gate，不加第二層 prompt。XML 污染偵測必須看順序與平衡，不能只看 opening tag 是否在任意位置存在。
+
+## §12 `launchctl submit` inferred KeepAlive 導致 Heavy session 反覆重開
+**Symptom:** Happy 同時出現 `OmniRoute Heavy` 與 `OmniRoute Heavy OR Safe` 兩個 direct session；關閉後又被強制開啟。launchd 分別顯示 `runs=4` 與 `runs=3`。
+**Root cause:** `~/.local/bin/happy-claude-heavy` 使用 `launchctl submit` 建立 Submitted daemon job；實測 job 屬性包含 `keepalive | inferred program`，與 §6 當時「不設 KeepAlive」的推斷相反。worker 退出後 launchd 會重啟，每次可產生新 Happy visible session。
+**Fix:** 依使用者選擇保留 label `com.51mini.happy-claude-heavy.20260731-185643.4795` / `OmniRoute Heavy`；對 `com.51mini.happy-claude-heavy.20260731-220056.73329` 執行精確 `launchctl bootout`，不使用會掃掉其他 session 的 `happy doctor clean`。
+**Verify:** OR Safe label 的 `launchctl print` exit `113`（service not found），PID `25913` 已消失；保留的 Heavy PID `25707` 與 parent `25706` 仍存活，HL `20130` 仍在 LISTEN。Happy daemon list 可暫存已死 PID，不代表程式仍運行。
+**Retrospective:** 不能從 launcher 未明寫 `KeepAlive=true` 推斷 job 不會重啟；必須看 `launchctl print` 的實際 `properties`。單 session 清理應使用精確 label，避免廣泛清理傷及其他 Happy daemon session。
+
+## §13 Mannie 殘留 20129 導致假性 provider authentication failed
+**Symptom:** Mannie session reset 後顯示 endpoint `http://127.0.0.1:20129/v1`，先連線失敗，最終回報 `Provider authentication failed`；log 顯示 `Missing Authentication header` 並把 `custom:omniroute` 標成 exhausted。
+**Root cause:** Heavy HL 已由舊 `20129` 遷移至 `20130`，但 Mannie `config.yaml` 的主 model、auxiliary web/compression fallback、`custom_providers.omniroute` 及 `auth.json` credential base URL 仍指向已停用 port。主 provider 連線失敗後 fallback 到沒有可用 credential 的 OpenRouter，產生誤導性 401；不是 OmniRoute local key 失效。
+**Fix:** 先 `launchctl bootout gui/$(id -u)/ai.hermes.gateway-mannie`，把上述所有 OmniRoute URL 改為 `http://127.0.0.1:20130/v1`，清除 `custom:omniroute` 的 exhausted/error 狀態，再 bootstrap gateway。修改 `auth.json` 前必須先 bootout，避免 Hermes shutdown 將記憶體舊狀態覆寫回檔案。
+**Verify:** `20130/v1/models` 回 HTTP 200 且含 `free-tools-heavy`；Mannie config/auth 無任何 `20129`；gateway PID 存活、Telegram connected；以 Mannie `HERMES_HOME` 執行 one-shot 回 `MANNIE_OK` exit 0；credential `last_status`、`last_error_code`、`last_error_message` 均為 null。
+**Retrospective:** 認證錯誤可能是 fallback 的次生錯誤。先比對設定 endpoint 與實際 listener，再判斷 key 是否失效；port migration 必須搜尋整份 config，包括後段 `custom_providers`。
+
+## §14 OmniRoute 已恢復但 Hermes 保留過期 exhausted 狀態
+**Symptom:** Mannie 顯示 `Provider authentication failed`；`auth.json` 的 `custom:omniroute` 保留 `last_status: exhausted`、`last_error_code: 401`、`Missing Authentication header`，但用相同 config key 直連 20128 與經 20130 proxy 都已回 HTTP 200。
+**Root cause:** OmniRoute 被停止／重啟期間，Hermes 收到一次缺少 Authentication header 的 401 並持久化 exhausted 狀態。服務恢復後該狀態不會自動清除，因此有效 credential 仍可能被跳過。舊 log 同時混有後續 fallback 的 401，容易誤判為 key 已失效。
+**Fix:** 先以 `launchctl bootout gui/$(id -u)/ai.hermes.gateway-mannie` 完整停止 gateway，避免 shutdown 把 in-memory 舊狀態覆寫回檔案。只把 `~/.hermes/profiles/mannie/auth.json` 中 `custom:omniroute` 的 `last_status`、`last_status_at`、`last_error_code`、`last_error_message` 清為 `null`，不修改 credential/fingerprint；再用既有 plist `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.hermes.gateway-mannie.plist` 重載。
+**Verify:** 同一把 Mannie config key 對 `http://127.0.0.1:20128/v1/chat/completions` 與 `http://127.0.0.1:20130/v1/chat/completions` 均回 HTTP 200/PONG；gateway 有 PID、log 出現 `✓ telegram connected`；`custom:omniroute` 四個狀態欄位保持 `null`；20128/20129/20130 均在 LISTEN。
+**Retrospective:** credential 類 401 先做 live probe，再決定換 key；不能只看跨重啟累積 log 或持久化 exhausted 標記。Hermes 的 auth 狀態修改必須遵守 bootout → edit → bootstrap 順序。
