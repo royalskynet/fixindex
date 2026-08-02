@@ -169,27 +169,15 @@ tail -5 ~/.hermes/profiles/mannie/logs/mcp-stderr.log              # 應有 "...
 ```
 MCP **無 hot-reload**，改完必須 `hermes --profile <p> gateway restart`。
 
-## §10 LSP 只做了一半（尚未修，記錄現狀）
+## §10 LSP 已修 — 見 fixindex 0029（2026-08-02）
 
-`agent/lsp/client.py:352-357` 在 initialize 時**宣告**了 `hover` / `definition` / `references` / `documentSymbol` 能力，但：
-```bash
-grep -rn "textDocument/definition|textDocument/references|textDocument/documentSymbol|workspace/symbol" \
-     ~/.hermes/hermes-agent --include=*.py    # 0 hits
-grep -rn "lsp" ~/.hermes/hermes-agent/toolsets.py                  # 0 hits
-```
-**LSP 目前唯一的出口是 `write_file` / `patch` 回傳值上的 `lsp_diagnostics` 欄位**（`tools/file_operations.py:169, 202-203`、`tools/patch_parser.py:480, 622`）—— 純被動、只在寫檔後、agent 無法主動查詢。**`read_file` 不回傳 `lsp_diagnostics`。**
+`agent/lsp/client.py` 已內建 4 個 LSP symbol 方法（`definition`、`references`、`document_symbols`、`workspace_symbols`）。
+補齊項目：
+- `agent/lsp/manager.py` — 新增 4 個同步包裝 + 4 個 async 內部方法（A2）
+- `tools/lsp_tool.py` — 新建 4 個對外工具 + helpers + `registry.register`（A3）
+- `toolsets.py` — 註冊 `lsp` toolset + 加入 `_HERMES_CORE_TOOLS`（A3）
 
-也沒有任何 repo map / symbol index 可退而求其次（`grep -rni "repo_map|repomap|codebase_index|symbol_index|code_index"` → 0 hits）。唯一的程式碼搜尋是 `search_files`（ripgrep 字串比對），無 AST / ctags / tree-sitter / embedding。
-
-`lsp.servers: {}` 是 **override/disable 表，不是 enable 清單** —— server 靠副檔名自動偵測 + lazy spawn，註冊表硬編在 `agent/lsp/servers.py:831+`。
-
-**預裝**（`install_strategy: auto` 下首次編輯才裝會卡住）：
-```bash
-hermes --profile mannie lsp install pyright
-hermes --profile mannie lsp install bash-language-server
-hermes --profile mannie lsp status
-```
-**不要編輯 `<profile>/lsp/package.json`** —— 那是 `npm install --prefix` 的產物，Hermes 不讀它（`install.py:207-237`）。
+完整記錄：**fixindex 0029-mannie-lsp-symbol-tools-complete**
 
 ## §11 無效嘗試（別再走一次）
 

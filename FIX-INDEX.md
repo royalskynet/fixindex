@@ -54,6 +54,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0031 | goal-lost-on-compression | /goal 標準目標在 context 壓縮後消失（session_id 沒搬 meta） | hermes-agent, goal, compression, mannie |
 | 0032 | max-iterations-no-continuation | 撞 max_iterations 後任務直接斷掉，沒有任何自動續跑 | hermes-agent, goal, max_iterations, continuation, mannie |
 | 0033 | approval-timeout-iteration-budget | Approval-timeout iterations burned budget silently; compression failures didn't distinguish timeout vs malformed response | mannie, hermes-agent, iteration-budget, context-compressor, approval |
+| 0034 | mannie-compression-failures-were-hardcoded-model | Mannie 壓縮失敗 14 次的原因是硬編 gemma 模型，換 auto/best-free 後歸零 — 別再當成待處理風險 | mannie, hermes-agent, context-compressor, llm-routing, omniroute, false-alarm |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
