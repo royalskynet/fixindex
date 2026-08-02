@@ -58,6 +58,8 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0035 | strip-proxy-anomaly-jsonl-literal-newline | strip-proxy anomalies.jsonl 無法解析 —— 寫的是字面 \n 不是換行；順帶記 ALS 在 req.on('end') 失效的正解 | strip-proxy, omniroute, jsonl, async-hooks, asynclocalstorage, logging, heavy-hl |
 | 0036 | guard-permit-hook-never-issues | guard permit 機制永遠簽不出票 —— UserPromptSubmit hook 讀了只有 PreToolUse 才有的欄位，heavy-hl 相關操作被永久封死 | claude-code, hooks, guard, launchctl, heavy-hl, permissions |
 | 0037 | omniroute-503-chat-admission-busy | Mannie 中途死掉的真因是 omniroute admission 閘的 503，不是模型也不是 timeout | hermes, mannie, omniroute, strip-proxy, fallback, launchd, 503, admission-control |
+| 0038 | autostash-pop-conflict-half-applied-tree | pull --autostash pop 炸 17 檔衝突，agent 沒發現繼續做事；半套修復比未修復更危險 | git, hermes, mannie, autostash, merge-conflict, launchd, bytecode |
+| 0039 | hermes-fork-workflow-committed-patches | hermes-agent 本地補丁改走 fork + committed patches，終結 autostash 賭博 | hermes, git, fork, rerere, workflow, upstream |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
