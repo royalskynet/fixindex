@@ -12,7 +12,7 @@ symptoms:
   - "Payload Too Large" 413 on 127.0.0.1:20130
 status: active
 supersedes: []
-related: [0023-omniroute-throttle, 0028-mannie-silent-amnesia-compression-chain, 0033-approval-timeout-iteration-budget]
+related: [0024-mannie-compression-dead-model, 0023-omniroute-throttle, 0028-mannie-silent-amnesia-compression-chain, 0033-approval-timeout-iteration-budget]
 ---
 # 0034 mannie-compression-failures-were-hardcoded-model
 
@@ -115,7 +115,43 @@ openrouter/inclusionai/ling-3.0-flash:free      http=200  0.98s
 
 記在這裡是因為：若未來有任何 agent 開始送 800+ 則訊息給 20130，症狀會是**立即 413、0 秒、無重試價值**，而不是逾時。屆時不要往「模型太慢 / timeout 太短」的方向查。
 
-## §6 教訓：為什麼會誤判
+## §6 真正未解的結構問題：fallback_chain 對 400 / 502 完全無效
+
+**這條比模型選型重要，而且沒有修。** 0024 §1 已經指出過 400 不推進 fallback，2026-08-02 複查確認機制未變，且 502 也一樣。
+
+`~/.hermes/hermes-agent/agent/auxiliary_client.py:5071`（另一處同樣邏輯在 `:5445`）：
+
+```python
+should_fallback = (
+    _is_payment_error(first_err)
+    or _is_connection_error(first_err)
+    or _is_rate_limit_error(first_err)
+)
+```
+
+只認 payment / connection / rate-limit 三類。`400`（模型下架）與 `502`（模型吐空）都不在內，所以**直接放棄該次摘要並暫停 60 秒**，`fallback_chain` 裡那三個健康的模型連碰都沒碰到。
+
+log 三方對照，行為完全一致：
+
+| 錯誤 | log 有 `trying fallback`？ | fallback_chain |
+|---|---|---|
+| `400 is not a valid model ID`（gemma-3-4b，4 次） | ❌ 無 | 沒啟動 |
+| `502 upstream_empty_response`（gemma-4-26b，3 次） | ❌ 無 | 沒啟動 |
+| `Request timed out`（6 次） | ✅ `connection error on custom ... trying fallback` | 啟動了（但 `all fallbacks exhausted`） |
+
+### 為什麼現在沒爆
+
+`auto/best-free` 是動態選型，OmniRoute 側會避開下架與吐空的模型，所以 400/502 的機率大幅下降 —— 問題被**繞過**了，不是被修好。若哪天 `auto/best-free` 本身回 400 或 502，fallback 一樣不會啟動，症狀會跟 7/31–8/01 一模一樣。
+
+### 這也是 §3 那三個 fallback 的實際處境
+
+fallback_chain 只在 connection error 時才有機會用到。它不是沒用（timeout 是最常見的失敗類型），但覆蓋範圍比字面上看起來窄很多。評估「要不要動 fallback_chain」時要把這點算進去。
+
+### 若要修
+
+在 `should_fallback` 加入 upstream 錯誤類別（`502` / `upstream_response_error` / `upstream_empty_response`）與模型不存在（`400` + `is not a valid model ID`）。但要注意這兩類跟「請求本身有問題」的 400 難以區分 —— 後者換模型也沒用，重試只是浪費配額。**未實作，本輪只記錄。**
+
+## §7 教訓：為什麼會誤判
 
 歸因錯誤的動作序列：
 
@@ -125,6 +161,14 @@ openrouter/inclusionai/ling-3.0-flash:free      http=200  0.98s
 4. **沒有對時間線** —— 對了就會發現失敗全在 config 改動之前
 
 正確順序見 memory `feedback_debug_verify_first`：**先驗配置與實際請求，模型永遠擺最後**。這次「模型」確實是根因，但也只有在「配置改過、時間線對得上」被驗證之後才能這樣說 —— 而且結論是「已經修好了」，不是「要改模型」。
+
+### 第二個更基本的錯誤：沒先查 fixindex
+
+`0024-mannie-compression-dead-model` **早就記過** gemma-3-4b 的 400 下架、記過完整 root cause、記過「400 不推進 fallback_chain」這個機制缺陷，甚至 0024 的 Fix 就是換成 gemma-4-26b（也就是後來 502 的那顆）。
+
+我沒查就從頭調查了一遍，把 0024 已經寫過的東西重推導一次。`~/.claude/CLAUDE.md` 的「整合任務前先看說明書（強制）」第一條就是 `fixindex find "<症狀關鍵字>"`。違反特徵它也寫了：**一步一發現，靠 error message 推導用法**。
+
+正面效果是複查確認了 0024 的機制描述至今仍然成立（見 §6），但那是運氣，不是方法。下次開頭就查。
 
 ## 重貼流程
 
