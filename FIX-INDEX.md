@@ -52,6 +52,8 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0029 | mannie-lsp-symbol-tools-complete | LSP Symbol Tools 完整實作 (A1-A3) — client.py + manager.py + lsp_tool.py + toolsets.py | lsp, hermes-agent, symbol-navigation, fixindex |
 | 0030 | lsp-symbol-tools-local-patch-reapply | LSP Symbol Tools Local Patch 重貼流程 (A7) | lsp, hermes-agent, local-patch, fixindex |
 | 0031 | goal-lost-on-compression | /goal 標準目標在 context 壓縮後消失（session_id 沒搬 meta） | hermes-agent, goal, compression, mannie |
+| 0032 | max-iterations-no-continuation | 撞 max_iterations 後任務直接斷掉，沒有任何自動續跑 | hermes-agent, goal, max_iterations, continuation, mannie |
+| 0033 | approval-timeout-iteration-budget | Approval-timeout iterations burned budget silently; compression failures didn't distinguish timeout vs malformed response | mannie, hermes-agent, iteration-budget, context-compressor, approval |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
