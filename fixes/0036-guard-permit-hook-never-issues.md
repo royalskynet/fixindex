@@ -185,6 +185,44 @@ B. 非授權訊息不簽票                             ✅ 「先驗 hook 沒�
 C. 過期 pending 自動 reap                       ✅ 塞一筆過期的，跑一次 hook 即消失
 ```
 
+### §5c 第一版修法有順序競態，已再改（同日）
+
+pending → permit 的轉換**只在收到使用者訊息那一刻掃一次**。實際踩到的序列：
+
+```
+17:22  pending 到期，被 reapExpired 掃掉
+17:2x  使用者訊息「授權重啟…」抵達 → 掃 pending → 0 筆 → 簽 0 張票
+17:28  agent 重跑指令 → 這時才又寫出新 pending（但授權已經用掉了）
+```
+
+**授權靜默失效，而且使用者以為授權過了。** 這不是實作 bug，是設計本身假設「deny 一定發生在授權之前、且 pending 一定還活著」。兩個假設都不保證。
+
+改法：授權訊息**一律簽一張 session 授權令牌** `auth_<sessionId>_<promptId>.json`，不管當下有沒有 pending 可轉。guard.js 在 permit 檢查失敗後多查一次令牌：
+
+```js
+if (!consumePermit(sessionId, cmdHash) && !consumeAuthToken(sessionId, cmd)) {
+  writePending(sessionId, cmdHash, cmd);
+  return denyPermitMsg(...);
+}
+```
+
+令牌不綁指令雜湊，所以安全性來自別處：**只能由含明確授權字樣的真實使用者訊息簽發、單次使用、5 分鐘到期、且 guard.js 會把它實際花在哪道指令寫進 `authorizations.log`（`via: "auth-token"`）**。等價於「使用者授權一次 = 放行一道受保護指令」，而不是「放行一段時間」。
+
+pending 保留，當診斷用（看得到 agent 嘗試過什麼被擋），不再是授權的必要條件。
+
+補充驗收（8 項，全過）：
+
+```
+A 授權在前、指令在後（舊設計會失敗的順序）  → ALLOW
+B 同一張授權用第二次                        → deny
+C pending 過期後才授權（本次踩到的競態）    → ALLOW
+D 一張授權只值一道指令，不是一段時間窗      → 第一道 ALLOW，第二道 deny
+E 非授權訊息                                → deny
+F 跨 session 使用                           → deny
+G ls / rm -rf 受保護路徑                    → ALLOW / deny（既有 RULES 未削弱）
+H 審計軌跡                                  → via:auth-token + 實際指令 + 授權語
+```
+
 ### 正確用法（給未來的 agent）
 
 ```
@@ -214,6 +252,8 @@ C. 過期 pending 自動 reap                       ✅ 塞一筆過期的，跑
 **「先驗 payload 再寫 hook」不是可選步驟。** 這支 hook 從頭到尾沒有跑通過一次，卻在 `guard-state/` 留下四個測試檔看起來像驗過了（session id 是 `session-transcript-test` / `valid-session-123`）——那些是用**手工捏的 payload** 測的，捏的時候用了 PreToolUse 的欄位名，所以測試自己也錯得一模一樣。**用假資料測，只會驗證你的假設跟你的程式一致，不會驗證程式跟現實一致。**
 
 第二個教訓：**deny 訊息本身是介面，寫錯會主動誤導。** 舊 `denyMsg` 叫 agent 加 `GUARD_OK=1`，在 permit 路徑上不但無效還會改變雜湊；agent 照做、失敗、再試一次，看起來像「授權機制壞了」而不是「指示錯了」。
+
+第三個教訓（§5c）：**授權機制不能假設事件順序。** 第一版修法通過了 9 項離線測試，卻在第一次真實使用就失效——因為離線測試都是「deny → 授權 → 重跑」的理想順序，沒有測「授權時 pending 已經不在」。設計授權流程時要問的是「使用者的意圖存在哪裡」，不是「怎麼把 A 轉成 B」。存在 pending 上就會跟著 pending 一起過期。
 
 ## 受影響檔案
 
