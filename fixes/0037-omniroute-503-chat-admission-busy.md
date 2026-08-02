@@ -1,3 +1,19 @@
+---
+id: 0037
+slug: omniroute-503-chat-admission-busy
+title: Mannie 中途死掉的真因是 omniroute admission 閘的 503，不是模型也不是 timeout
+tags: [hermes, mannie, omniroute, strip-proxy, fallback, launchd, 503, admission-control]
+symptoms:
+  - "The model provider failed after retries"
+  - "HTTP 503: Structurally heavy chat request capacity is busy; retry shortly"
+  - chat_admission_busy
+  - "API call failed after 1 retries"
+  - agent 派工跑到一半無預警停住，TG 只回一句 provider failed
+  - fallback_chain 設了一堆模型卻完全沒被嘗試
+  - 改了 launchd plist 的 EnvironmentVariables 卻沒生效
+  - ps eww 看不到子行程的環境變數
+---
+
 # 0037 — Mannie 中途死掉的真因是 omniroute admission 閘的 503，不是模型也不是 timeout
 
 - **狀態**：fixed

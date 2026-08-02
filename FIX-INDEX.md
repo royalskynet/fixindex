@@ -57,6 +57,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0034 | mannie-compression-failures-were-hardcoded-model | Mannie 壓縮失敗 14 次的原因是硬編 gemma 模型，換 auto/best-free 後歸零 — 別再當成待處理風險 | mannie, hermes-agent, context-compressor, llm-routing, omniroute, false-alarm |
 | 0035 | strip-proxy-anomaly-jsonl-literal-newline | strip-proxy anomalies.jsonl 無法解析 —— 寫的是字面 \n 不是換行；順帶記 ALS 在 req.on('end') 失效的正解 | strip-proxy, omniroute, jsonl, async-hooks, asynclocalstorage, logging, heavy-hl |
 | 0036 | guard-permit-hook-never-issues | guard permit 機制永遠簽不出票 —— UserPromptSubmit hook 讀了只有 PreToolUse 才有的欄位，heavy-hl 相關操作被永久封死 | claude-code, hooks, guard, launchctl, heavy-hl, permissions |
+| 0037 | omniroute-503-chat-admission-busy | Mannie 中途死掉的真因是 omniroute admission 閘的 503，不是模型也不是 timeout | hermes, mannie, omniroute, strip-proxy, fallback, launchd, 503, admission-control |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
