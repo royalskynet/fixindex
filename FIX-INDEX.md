@@ -60,6 +60,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0037 | omniroute-503-chat-admission-busy | Mannie 中途死掉的真因是 omniroute admission 閘的 503，不是模型也不是 timeout | hermes, mannie, omniroute, strip-proxy, fallback, launchd, 503, admission-control |
 | 0038 | autostash-pop-conflict-half-applied-tree | pull --autostash pop 炸 17 檔衝突，agent 沒發現繼續做事；半套修復比未修復更危險 | git, hermes, mannie, autostash, merge-conflict, launchd, bytecode |
 | 0039 | hermes-fork-workflow-committed-patches | hermes-agent 本地補丁改走 fork + committed patches，終結 autostash 賭博 | hermes, git, fork, rerere, workflow, upstream |
+| 0040 | hermes-profile-confusion-send-is-not-dispatch | hermes send 不帶 -p 走 active_profile 錯投；send 是 outbound 不是派工；Mannie 派工只走 md 手貼 | hermes, profile, mannie, koko, telegram, dispatch, plugins, launchd |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
