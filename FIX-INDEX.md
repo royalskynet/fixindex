@@ -49,6 +49,9 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0026 | launchd-env-var-expansion-empty-string | TODO |  |
 | 0027 | fail-open-static-checker | TODO |  |
 | 0028 | mannie-silent-amnesia-compression-chain | Agent 靜默失憶：壓縮鏈五重複合失效（context 砍半 + target_ratio 語意誤解 + 摘要模型過慢 + fallback 死路 + 靜默丟中段） | hermes, mannie, compression, context, auxiliary, fallback, omniroute, lsp, mcp, toolset |
+| 0029 | mannie-lsp-symbol-tools-complete | LSP Symbol Tools 完整實作 (A1-A3) — client.py + manager.py + lsp_tool.py + toolsets.py | lsp, hermes-agent, symbol-navigation, fixindex |
+| 0030 | lsp-symbol-tools-local-patch-reapply | LSP Symbol Tools Local Patch 重貼流程 (A7) | lsp, hermes-agent, local-patch, fixindex |
+| 0031 | goal-lost-on-compression | /goal 標準目標在 context 壓縮後消失（session_id 沒搬 meta） | hermes-agent, goal, compression, mannie |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
