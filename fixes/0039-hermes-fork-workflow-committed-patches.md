@@ -17,7 +17,7 @@ symptoms:
 
 ## 1. 機制（hermes 原生支援，寫在源碼裡）
 
-`hermes_cli/update_cmd.py`：`_is_fork()` @1425（只看 origin URL ≠ 官方清單）、`_sync_fork_with_upstream()` @1497、`_sync_with_upstream_if_needed()` @1513。origin 非官方 → updater 走 fork 路徑：自動掛官方為 `upstream` remote、`origin/main` 嚴格落後時自動同步、照樣處理 npm build / gateway 重啟 / 上游檔案搬家。
+`hermes_cli/update_cmd.py`：`_is_fork()` @1425（只看 origin URL ≠ 官方清單）、`_sync_fork_with_upstream()` @1497、`_sync_with_upstream_if_needed()` @1513。重大校正：native update 偵測到 origin 有 local commits 時會 preserve/skip，不會替本地補丁 rebase；正式同步必須由外部在 clean tree 執行 manual rebase。
 
 ## 2. 本機現況（2026-08-02 起）
 
@@ -36,11 +36,12 @@ rerere    enabled
 ```
 git -C ~/.hermes/hermes-agent fetch upstream
 git -C ~/.hermes/hermes-agent rebase upstream/main    # 衝突逐 commit 顯式暫停，rerere 重放已解過的
-git -C ~/.hermes/hermes-agent push -f origin main     # rebase 後必然要 force；origin 是自己的私有 repo，安全
-                                                       # （guard 攔 push --force：屬預期，說明後授權執行）
+git -C ~/.hermes/hermes-agent push --force-with-lease origin main
 ```
 
 rebase 起衝突時：優先用三方 stage 重建（見 `0038` §2），解完跑補丁回歸測試集（`tests/agent/test_admission_busy.py` 等，Mannie T2 產出）確認補丁全活著。
+
+禁止使用 `push -f`；`--force-with-lease` 用遠端租約避免覆蓋其他更新。Mannie 維持 git 唯讀，rebase 與 push 只由外部執行者操作。
 
 ## 4. 坑
 

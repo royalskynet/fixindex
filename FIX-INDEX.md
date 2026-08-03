@@ -61,6 +61,12 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0038 | autostash-pop-conflict-half-applied-tree | pull --autostash pop 炸 17 檔衝突，agent 沒發現繼續做事；半套修復比未修復更危險 | git, hermes, mannie, autostash, merge-conflict, launchd, bytecode |
 | 0039 | hermes-fork-workflow-committed-patches | hermes-agent 本地補丁改走 fork + committed patches，終結 autostash 賭博 | hermes, git, fork, rerere, workflow, upstream |
 | 0040 | hermes-profile-confusion-send-is-not-dispatch | hermes send 不帶 -p 走 active_profile 錯投；send 是 outbound 不是派工；Mannie 派工只走 md 手貼 | hermes, profile, mannie, koko, telegram, dispatch, plugins, launchd |
+| 0041 | mannieselftasks-20260802-completed | Mannie self-tasks 2026-08-02 completed — M3, T1–T3, T5 | mannie, hermes-agent, kanban, strip-proxy, test, admission-busy, fallback |
+| 0042 | M1-health-check | "Phase M1: 通用 profile 健康檢查器 + 測試" | "mannie", "health-check", "observability", "phase-M1" |
+| 0043 | M2-bg-review-denied | "Phase M2: Background review denied 根因稽核報告" | "mannie", "background-review", "observability", "phase-M2" |
+| 0044 | M3-lsp-availability | "Phase M3: LSP 可用性離線契約測試" | "mannie", "lsp", "testing", "phase-M3" |
+| 0045 | M4-patch-lifecycle-report | "Phase M4: 補丁生命週期 read-only 報告" | "mannie", "cron", "patch", "lifecycle", "phase-M4" |
+| 0046 | mannie-optimization-progress-and-max-autonomy-plan | Mannie 優化外部卷進度與最大自主執行計畫 | mannie, hermes-agent, optimization, execution-plan, progress, handoff |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
