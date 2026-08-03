@@ -44,3 +44,13 @@ related: [0039, 0041, 0042, 0043, 0044, 0045]
 **Fix:** 0042–0045 改 partial 並附缺口；0039 改 manual clean-tree rebase + regression + `push --force-with-lease`，記錄 native update 對 local commits preserve/skip。
 
 **Verify:** `fixindex re-index` 後，以「盡可能交給 Mannie」、「health checker 未追蹤」、「fork force-with-lease」反查可命中。
+
+## §4 Fixindex 發布完成
+
+**Symptom:** 進度若只留在 working tree，下一個 session 或設備無法可靠取得。
+
+**Root cause:** 0041–0046 原為未追蹤草稿，`FIX-INDEX.md` 也只存在本地修改。
+
+**Fix:** 校正、re-index 後，以 commit `94f44b8`（`fixes: record Mannie optimization progress and handoff plan`）推送 `origin/main`；包含 0039 SOP 修正、0041–0046 與索引。
+
+**Verify:** push 回應 `dc343ff..94f44b8 main -> main`；兩個 symptoms query 命中 0046，`push --force-with-lease` grep 命中 0039/0046。
