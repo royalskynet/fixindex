@@ -65,8 +65,9 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0042 | M1-health-check | "Phase M1: 通用 profile 健康檢查器 + 測試" | "mannie", "health-check", "observability", "phase-M1" |
 | 0043 | M2-bg-review-denied | "Phase M2: Background review denied 根因稽核報告" | "mannie", "background-review", "observability", "phase-M2" |
 | 0044 | M3-lsp-availability | "Phase M3: LSP 可用性離線契約測試" | "mannie", "lsp", "testing", "phase-M3" |
-| 0045 | M4-patch-lifecycle-report | "Phase M4: 補丁生命週期 read-only 報告" | "mannie", "cron", "patch", "lifecycle", "phase-M4" |
+| 0045 | M4-patch-lifecycle-report | "Phase M4: 補丁生命週期 read-only 報告" | "mannie", "patch", "lifecycle", "phase-M4", "git-history" |
 | 0046 | mannie-optimization-progress-and-max-autonomy-plan | Mannie 優化外部卷進度與最大自主執行計畫 | mannie, hermes-agent, optimization, execution-plan, progress, handoff |
+| 0047 | A5-fixindex-correction | "Phase A5: Fixindex 校正與完整紀錄" | "mannie", "fixindex", "phase-A5" |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.
