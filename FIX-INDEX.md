@@ -26,6 +26,7 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 | 0003 | free-claude-code-model-mapping | free-claude-code (fcc) sonnet/opus 映射模型持續 Provider API request failed | free-claude-code, fcc, nvidia-nim, model-routing, provider, gpt-oss-120b, thinking-injection, mistral-large, server-down |
 | 0004 | git-clone-early-eof-shallow | git clone 大歷史 repo 反覆 early EOF / .invalid HEAD —— 用 shallow clone 繞過 | git, git-clone, early-eof, rpc-failed, http2-cancel, shallow-clone, depth-1, invalid-head, broken-branch, zombie-process, prophet-protocol |
 | 0005 | hermes-agnes-no-final-response | Hermes 接 Agnes AI custom provider 設定 + 「no final response was produced」已知 harness bug | hermes, hermes-agent, agnes-ai, custom-provider, openai-compatible, no-final-response, content-null, tool-calls, vllm, nousresearch, cc-switch, fallback-provider |
+| 0006 | hermes-amy-telegram-qmd-skills | Hermes Amy Telegram gateway、slash commands、QMD 與全模型存取整合 | hermes, hermes-agent, amy, telegram, gateway, slash-commands, qmd, llm-wiki, skills, openrouter, model-routing, allowlist |
 <!-- fixindex:table:end -->
 
 ## Adding entries
