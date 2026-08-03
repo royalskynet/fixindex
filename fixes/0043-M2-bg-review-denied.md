@@ -7,9 +7,9 @@ symptoms:
   - "Background review 子 agent 在每個 turn 結束後觸發"
   - "36 次 denied，主要是 execute_code(13)、read_file(11)"
   - "模型需 2-6 輪 denied 才適應僅允許 4 個工具"
-status: partial
+status: draft
 supersedes: []
-related: ["0042"]
+related: ["0042", "mannie-m2r-background-review-denied"]
 ---
 
 # 0043 M2-bg-review-denied

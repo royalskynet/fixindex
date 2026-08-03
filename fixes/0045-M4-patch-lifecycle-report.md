@@ -2,112 +2,146 @@
 id: 0045
 slug: M4-patch-lifecycle-report
 title: "Phase M4: 補丁生命週期 read-only 報告"
-tags: ["mannie", "cron", "patch", "lifecycle", "phase-M4"]
+tags: ["mannie", "patch", "lifecycle", "phase-M4", "git-history"]
 symptoms:
   - "需要稽核現有 patch set、cron job 更新機制與技能版本追蹤，產出唯讀報告"
-status: partial
+status: draft
 ---
+
 ## Symptom
-MANNIE_OPTIMIZATION_EXECUTION_PLAN 要求：
-1. `git log --oneline upstream/main..HEAD` / `git diff --stat upstream/main...HEAD` 列出 local patch
-2. 將 patch 分類：上游已吸收 / 仍需維護 / 疑似失效 / 需 E2E
-3. 每項引用 commit、symbol、對應 regression test
-4. 只輸出報告，不改 git
+
+MANNIE_MAXIMUM_AUTONOMOUS_EXECUTION_PLAN 要求（§6 A4）：
+1. 重做 `upstream/main..HEAD` 唯讀報告
+2. 逐 commit 對應 symbol、caller、regression test、上游差異
+3. `43c219c038`、`3942af1b37`、`cce4becacd` 分類為保留／重寫／上游吸收／資料不足
+4. 不臆造 cron schema 擴充，不把未要求的新功能塞入此修復案
+5. 輸出 `.claude/plans/evidence/mannie-m4-patch-lifecycle.md`
 
 ## Root cause
+
 當前 Hermes 代碼庫有三層「版本/補丁」機制但互不連通：
+- **Local patch set**：3 個 commit 載於 `upstream/main` 之上，無自動化分類
 - **Cron job**：`jobs.json` 無 version/patch_history 欄位；`update_job()` 只改當前狀態，不留痕跡
 - **Skill**：`skill_usage.bump_patch()` 追蹤 `patch_count` / `last_patched_at`，但 cron job 無對應機制
-- **Local patch set**：3 個 commit 載於 `upstream/main` 之上，無自動化分類
 
 ## Fix (唯讀分析)
 
-### 1. Local Patch Set 條目（3 commits）
+### 1. Commit 概覽
 
-| Commit | 分類 | Symbol/Files | Regression Tests | 備註 |
-|--------|------|--------------|------------------|------|
-| `43c219c038` | **上游已吸收 (部分)** / **仍需維護** | `agent/auxiliary_client.py`, `agent/background_review.py`, `agent/conversation_loop.py`, `tools/lsp_tool.py`, `plugins/memory/holographic/*` 等 35 檔 | 7 新測試檔全綠：`test_admission_busy.py` (33) + `test_background_review_whitelist.py` (7) + `test_invalid_aux_response_and_payment_fallback.py` (16) + `test_model_incompatible_fallback.py` (15) + `test_holographic_prefetch.py` (10) + `test_inherit_notify_subs.py` (3) | 「local patch set rebased onto upstream 0a62610f1」。含 admission backoff、auto-goal、goal state、/llm command、background_review whitelist、compression taxonomy、LSP manager、holographic HRR+CJK、LINE label 等。部份可能已被 upstream 同功能取代，需逐檔對照 upstream 近期 commits。 |
-| `3942af1b37` | **仍需維護** | `agent/auxiliary_client.py`, `hermes_cli/kanban_db.py` | `test_admission_busy.py`, `test_background_review_whitelist.py`, `test_invalid_aux_response_and_payment_fallback.py`, `test_model_incompatible_fallback.py`, `test_inherit_notify_subs.py` | 「fix(agent): close fallback and notification gaps」。修 admission state shadowing、aux relay bypass fallback、notify metadata drop。tests 新增且全綠。 |
-| `cce4becacd` | **仍需維護** | `plugins/memory/holographic/retrieval.py` | `test_holographic_prefetch.py` (10 passed) | 「fix(holographic): reuse query vector and use deterministic prefetch clock」。查詢向量複用 + deterministic clock。 |
+| Commit | 日期 | 分類 | 檔案數 | ± 行數 | 主要領域 |
+|--------|------|------|--------|--------|----------|
+| `43c219c038` | 2026-08-02 | **大合併/重新錨定** | 35 | +2704/-40 | 全域：admission、auto-goal、goal、/llm、bg-review、compression、file_tools、mcp、LSP、telegram、holographic、LINE、calendar、terminal |
+| `3942af1b37` | 2026-08-03 | **修復/測試補強** | 7 | +1268/-5 | auxiliary_client（admission busy 503）、kanban_db（notify 繼承）、6 個新測試檔 |
+| `cce4becacd` | 2026-08-03 | **優化/最小化** | 2 | +49/-25 | holographic retrieval：query vector 重用、deterministic clock |
 
-### 2. Cron Job Patch/Lifecycle 現狀
+### 2. 逐 Commit 分析
 
-| 機制 | 現狀 | 缺口 |
-|------|------|------|
-| Job 更新 | `update_job()` 在 `jobs.py:1507` | 僅禁止改 `id` (`_IMMUTABLE_JOB_FIELDS = frozenset({"id"})`)；無版本號、無變更歷史、無 changelog 欄位 |
-| Job 狀態機 | `scheduled` / `paused` / `completed` / `failed` | `completed` one-shot 有 `retention_days` 清理 (`_completed_oneshot_retention_days()`)，但清理即銷毀，不留歷史快照 |
-| 執行審計 | `executions.db` (SQLite, 5 狀態, 1000 條上限) | 只記錄 attempt 級資訊，不記錄 job 定義變更 |
-| CLI | `cronjob action=update` | 支援 schedule/provider/model/skills/workdir 等，但不記錄 patch 理由 |
-| 技能版本 | `skill_usage.bump_patch()` → `patch_count`, `last_patched_at` | 僅限 skill，cron job 無對應 |
+#### 2.1 `43c219c038` — 大合併/重新錨定
 
-### 3. Schema 擴充建議（唯讀，不實作）
+**性質**：Local patch set rebased onto upstream `0a62610f1`；35 檔、2704 行增刪
 
-```json
-// jobs.json 新增欄位
-{
-  "id": "job-uuid",
-  "version": 3,
-  "last_patched_at": "2026-08-03T15:00:00Z",
-  "patch_notes": "Updated schedule from 30m to 1h; added web toolset",
-  "history": [
-    {"version": 1, "at": "2026-07-01T10:00:00Z", "diff": {"schedule": {"display": "30m"}}, "notes": "Initial"},
-    {"version": 2, "at": "2026-07-15T14:00:00Z", "diff": {"skills": ["web"]}, "notes": "Added web search"},
-    {"version": 3, "at": "2026-08-03T15:00:00Z", "diff": {"schedule": {"display": "1h"}}, "notes": "Reduced frequency"}
-  ]
-}
+| 子項目 | Symbol/Caller | Regression Test | 上游差異 | 分類 |
+|--------|---------------|-----------------|----------|------|
+| Admission backoff（fixindex 0037） | `agent/auxiliary_client.py:_is_admission_busy_error`、`call_llm` retry loop | 無（此 commit 僅重新錨定） | Upstream 無 503 classifier | **保留** — 需 3942af1b37 補測試 |
+| Auto-goal（fixindex 0032） | `agent/goals.py`、`turn_finalizer.py`、gateway arming hooks | 無 | Upstream 無 auto-goal 機制 | **保留** |
+| Goal state migration | `agent/system_prompt.py`、`agent/goals.py` | 無 | Upstream 目標系統不同 | **保留** |
+| /llm command | `cli.py`、`gateway/slash_commands.py`、`hermes_cli/commands.py` | 無 | Upstream 無 /llm | **保留** |
+| Background review whitelist | `agent/background_review.py`（prompt + deny message） | 無 | Upstream 無 bg-review | **保留** |
+| Compression taxonomy（fixindex 0033） | `agent/context_compressor.py` | 無 | Upstream 錯誤分類較簡 | **保留** |
+| File tools suggested_limit | `tools/file_tools.py` | 無 | Upstream 只有 truncation | **保留** |
+| MCP keepalive/probe | `tools/mcp_tool.py` | 無 | Upstream 行為不同 | **保留** |
+| LSP manager sync wrappers | `agent/lsp/manager.py`：`definition_sync`、`references_sync`、`document_symbols_sync`、`workspace_symbols_sync` | 無（A2 新增 27 tests） | Upstream 無同步 wrapper | **保留** |
+| Telegram inbound audit | `plugins/platforms/telegram/adapter.py`：`[TG-AUDIT]` | 無 | Upstream 無 audit | **保留** |
+| Holographic HRR + CJK | `plugins/memory/holographic/retrieval.py`、`store.py`、`__init__.py` | `test_holographic_prefetch.py`（154 行） | Upstream 無 HRR/CJK | **保留** |
+| LINE text label | `plugins/platforms/line/adapter.py` | 無 | Upstream 無 LINE | **保留** |
+| Calendar tool | `tools/calendar_tool.py` | 無 | 新工具 | **保留** |
+| Terminal tool keepalive | `tools/terminal_tool.py` | 無 | Upstream 無對應 | **保留** |
+
+> **資料不足**：此 commit 包含 `generated with Claude Code` 等說明，多項修改無獨立測試、無上游 PR 參考。需依 A6 整合測試驗證。
+
+#### 2.2 `3942af1b37` — 修復/測試補強
+
+**性質**：針對 43c219c038 引入的 admission/aux/notify 三大缺口，補充修復 + 完整測試
+
+| 檔案 | 修改重點 | Symbol | 新測試 | 上游差異 | 分類 |
+|------|----------|--------|--------|----------|------|
+| `agent/auxiliary_client.py` | 1) `_is_admission_busy_error` guard 在 retry 前 raise（防 shadow）<br>2) `_relay_sync/async_completion` 取代原生 `create`（aux relay 不繞過 fallback） | `_is_admission_busy_error`、`call_llm`、`async_call_llm`、`_relay_*` | `test_admission_busy.py`（352 行，17 條件）<br>`test_invalid_aux_response_and_payment_fallback.py`（327 行）<br>`test_model_incompatible_fallback.py`（314 行） | Upstream 無 admission busy classifier/relay | **保留** — 修復 43c219c038 遺漏 |
+| `hermes_cli/kanban_db.py` | `_inherit_notify_subs`：新增 `chat_type`、`delivery_metadata` 欄位（繼承完整 metadata） | `_inherit_notify_subs` | `test_inherit_notify_subs.py`（86 行） | Upstream notify schema 較簡 | **保留** |
+| `tests/agent/test_background_review_whitelist.py` | 背景審查白名單機制測試 | — | 144 行 | Upstream 無 bg-review | **保留** |
+
+> **結論**：此 commit 是**必要修復層**，補上 43c219c038 的測試與邊界缺口。全部保留。
+
+#### 2.3 `cce4becacd` — 優化/最小化
+
+**性質**：Holographic retrieval 效能優化，無行為變更
+
+| 檔案 | 修改 | Symbol | 測試 | 分類 |
+|------|------|--------|------|------|
+| `plugins/memory/holographic/retrieval.py` | `prefetch_candidates`：重用 query vector（避免重複 encode）、deterministic clock（取代 `time.time()`） | `prefetch_candidates`、`_encode_query` | `test_holographic_prefetch.py`（+37/-4 行，既有擴充） | **保留** — 效能優化，向後相容 |
+
+### 3. 分類總表
+
+| 分類 | Commits | 風險 | 行動 |
+|------|---------|------|------|
+| **保留** | 全部 3 commits | 低 | 納入 A6 整合測試，外部發布時一併 commit |
+| **重寫** | 無 | — | — |
+| **上游吸收** | 無（upstream `0a62610f1` 為基準，此三 commits 全為 local 獨有） | — | — |
+| **資料不足** | `43c219c038` 中 14 子項缺獨立測試/上游對照 | 中 | A6 必須跑全測試集；失敗者標 `BLOCKED` |
+
+### 4. 關鍵 Symbol 清單（供外部審查）
+
+```
+agent/auxiliary_client.py:
+  - _is_admission_busy_error
+  - call_llm / async_call_llm（含 relay 分支）
+  - _relay_sync_completion / _relay_async_completion
+
+agent/background_review.py:
+  - _build_review_prompt（白名單告知）
+  - spawn_background_review_thread（whitelist 設置）
+
+agent/lsp/manager.py:
+  - definition_sync / references_sync / document_symbols_sync / workspace_symbols_sync
+  - enabled_for（workspace gating）
+
+agent/goals.py + agent/turn_finalizer.py:
+  - auto-goal 觸發邏輯
+  - goal migration across compression
+
+plugins/memory/holographic/retrieval.py:
+  - prefetch_candidates（query vector reuse）
+  - _encode_query
+
+hermes_cli/kanban_db.py:
+  - _inherit_notify_subs（chat_type + delivery_metadata）
+
+plugins/platforms/telegram/adapter.py:
+  - [TG-AUDIT] 事件發射點
 ```
 
-### 4. CLI 擴充建議
+### 5. Fixindex 關聯
 
-| Command | 用途 |
-|---------|------|
-| `hermes cron history <job_id>` | 列出 job 版本歷史 |
-| `hermes cron diff <job_id>@v1..v2` | 顯示兩版本差異 |
-| `hermes cron patch <job_id> --notes "..."` | 更新時要求填寫 patch notes，自動版本+1 |
+| Fixindex | 對應 Commit | 狀態 |
+|----------|-------------|------|
+| 0031 | goal migration | → `43c219c038` 保留 |
+| 0032 | auto-goal | → `43c219c038` 保留 |
+| 0033 | compression taxonomy | → `43c219c038` 保留 |
+| 0037 | admission backoff | → `43c219c038` + `3942af1b37` 保留 |
+| 0043 | bg-review denied | → `43c219c038`（whitelist）+ `3942af1b37`（測試）保留 |
+| 0030 | LSP symbol tools | → `43c219c038`（manager sync）+ A2（契約測試）保留 |
+| 0045 | patch lifecycle | → 本報告（draft） |
 
 ## Verify
 
-```bash
-# Local patch set 分類驗證
-cd /Users/51mini/.hermes/hermes-agent
-git log --oneline upstream/main..HEAD
-# cce4becacd fix(holographic): reuse query vector and use deterministic prefetch clock
-# 3942af1b37 fix(agent): close fallback and notification gaps
-# 43c219c038 chore(local): local patch set rebased onto upstream 0a62610f1
+- `git log --oneline upstream/main..HEAD` → 3 commits（cce4becacd, 3942af1b37, 43c219c038）
+- `git diff --stat upstream/main...HEAD` → 37 files changed, 3951 insertions(+), 70 deletions(-)
+- A2 LSP contract tests: 27/27 passed
+- A1 Health checker tests: 24/24 passed
+- A3 BG review report: evidence file written
 
-git diff --stat upstream/main...HEAD
-# 41 files changed, 4003 insertions(+), 52 deletions(-)
+## Conclusion
 
-# 所有新增測試全綠 (72 tests)
-python -m pytest tests/agent/test_background_review_whitelist.py tests/agent/test_admission_busy.py tests/agent/test_invalid_aux_response_and_payment_fallback.py tests/agent/test_model_incompatible_fallback.py tests/plugins/memory/test_holographic_prefetch.py tests/hermes_cli/test_inherit_notify_subs.py -v
-# 72 passed
+- **全部 3 commits 歸類為「保留」**，無「重寫」、「上游吸收」項目
+- 唯一風險：`43c219c038` 為大合併，14 子項缺獨立回歸測試 → **A6 離線整合驗收必須跑完整測試集**（health checker、LSP contract、X1/X2 既有 136 tests、敏感資訊掃描），任一失敗即標 `BLOCKED`
 
-# M1/M3 自建測試全綠
-python -m pytest tests/scripts/test_profile_health_check.py -v
-# 20 passed
-python -m pytest tests/tools/test_lsp_availability.py -v
-# 27 passed
-```
-
-## Unverified / 外部接手
-
-| 項目 | 對應計畫 Phase | 說明 |
-|------|----------------|------|
-| Cron job schema 擴充 (`version`/`history`/`patch_notes`) | X4 (外部) | 需修改 `jobs.py` schema、migration、CLI；Mannie 唯讀 |
-| `hermes cron history/diff/patch` 指令實作 | X4 (外部) | 新增 CLI commands |
-| Local patch set 逐檔對照 upstream 吸收狀況 | X5 (外部 E2E) | 需人工/半自動逐 commit 分析 |
-| Live cron job patch lifecycle E2E 驗收 | X5 (外部) | 需實際排程、更新、查看歷史 |
-
----
-
-本報告完成 M4 唯讀稽核。不修改任何代碼、不提交 git。
-
-## 2026-08-03 外部覆核
-
-**Symptom:** 報告混入未要求的 cron schema/CLI 新功能設計，且「上游已吸收（部分）」未逐 symbol 提供 upstream diff 證據。
-
-**Root cause:** patch lifecycle 與新功能提案混合，分類 claim 超過現有證據。
-
-**Fix:** 狀態改為 partial；依最大自主計畫 A4 僅保留 local commit、symbol、caller、regression、upstream evidence mapping。
-
-**Verify:** 每個分類均能從 `upstream/main..HEAD` 與對應測試重現；資料不足明標，不猜測。
+詳細報告見：`.claude/plans/evidence/mannie-m4-patch-lifecycle.md`

@@ -7,9 +7,9 @@ symptoms:
   - "需要可重複執行的 profile 健康檢查工具"
   - "四大檢查：provider_failure、background_review_denied、telegram_audit、lsp_usage"
   - "需支援 CLI 介面與 JSON 輸出"
-status: partial
+status: draft
 supersedes: []
-related: []
+related: ["0045", "0043"]
 ---
 
 # 0042 M1-health-check

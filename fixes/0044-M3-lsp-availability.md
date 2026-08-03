@@ -5,7 +5,9 @@ title: "Phase M3: LSP 可用性離線契約測試"
 tags: ["mannie", "lsp", "testing", "phase-M3"]
 symptoms:
   - "需要驗證 LSP 工具在不活躍、無 workspace、broken-set 等情境下的行為"
-status: partial
+status: draft
+supersedes: []
+related: ["0045", "mannie-m4-patch-lifecycle"]
 ---
 ## Symptom
 驗證 `tools.lsp_tool` 四工具在 LSP 服務不活躍時正確回傳 `"error": "LSP service is not active"`，在輸入參數缺失時回傳具體錯誤，且 broken-set 機制正確存在。
@@ -34,10 +36,10 @@ cd /Users/51mini/.hermes/hermes-agent && python -m pytest tests/tools/test_lsp_a
 
 ## 2026-08-03 外部覆核
 
-**Symptom:** 測試檔仍 untracked，主要為 mock/contract；尚無 temp repo real local server 路徑，也不能證明 X5 live `lsp_definition` 成功。
+**Symptom:** 測試檔仍 untracked，主要為 mock/contract；尚無 temp repo real local server 路徑，也不能證明 live `lsp_definition` 成功。
 
 **Root cause:** 離線 handler 測試與 live availability 被當成同一完成條件。
 
-**Fix:** 狀態維持 partial；依最大自主計畫 A2 補 temp repo contract、dependency/skip matrix，live 證據留外部 gate。
+**Fix:** 狀態維持 draft；依最大自主計畫 A2 補 temp repo contract、dependency/skip matrix，live 證據留外部 gate。
 
 **Verify:** A2 tests + 外部 X5 live evidence 分別成立後才可 completed。
