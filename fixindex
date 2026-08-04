@@ -26,6 +26,7 @@ Commands:
   fixindex new <slug>           scaffold next-numbered fix file
   fixindex re-index             regenerate FIX-INDEX.md directory table
   fixindex supersede <old> <new>  mark old superseded by new
+  fixindex fi <domain>            append fix entry from stdin (auto-match + commit)
   fixindex help                 this message
 
 Env:
@@ -161,6 +162,123 @@ cmd_re_index() {
   echo "re-indexed: $INDEX_FILE"
 }
 
+# Find best matching fix file for a domain keyword (case-insensitive slug/title match)
+find_domain_file() {
+  local kw="$1" best="" best_id=0
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+    local base id slug title
+    base=$(basename "$f" .md)
+    id="${base%%-*}"
+    slug="${base#*-}"
+    title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$f")
+    if echo "$slug $title" | grep -qiF "$kw"; then
+      local n=$((10#$id))
+      (( n > best_id )) && { best="$f"; best_id=$n; }
+    fi
+  done
+  echo "$best"
+}
+
+# Count existing sections (§N) in a fix file
+count_sections() {
+  local n
+  n=$(grep -c '^## §[0-9]' "$1" 2>/dev/null) || n=0
+  echo "$n"
+}
+
+# fi — append fix entry from stdin to domain-matched fix file
+cmd_fi() {
+  [[ $# -ge 1 ]] || die "usage: fixindex fi <domain-keyword> [--title TITLE] [--tags t1,t2] [--push]"$'\n  Reads body from stdin'
+
+  local domain="$1"
+  shift
+  local title="" tags="" do_push=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --title) title="$2"; shift 2 ;;
+      --tags) tags="$2"; shift 2 ;;
+      --push) do_push=true; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  local body
+  body=$(cat)
+  [[ -n "$body" ]] || die "no body provided on stdin"
+
+  local target
+  target=$(find_domain_file "$domain")
+
+  if [[ -n "$target" ]]; then
+    local next_n
+    next_n=$(($(count_sections "$target") + 1))
+
+    if [[ -n "$title" ]]; then
+      sed -i '' "s/^title:.*/title: \"$title\"/" "$target"
+    fi
+
+    # Re-number section header
+    local section_body
+    section_body=$(printf '%s\n' "$body" | sed -E 's/^## §[0-9]+/## §'"${next_n}"'/')
+
+    echo "" >> "$target"
+    printf '%s\n' "$section_body" >> "$target"
+    echo "appended: ${target##*/} (§${next_n})"
+  else
+    local slug_name
+    slug_name=$(echo "$domain" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g;s/--*/-/g;s/^-//;s/-$//')
+    [[ -n "$slug_name" ]] || slug_name="fix"
+
+    local id newfile
+    id=$(next_id)
+    newfile="$FIXDIR/${id}-${slug_name}.md"
+
+    # Write frontmatter + template
+    cat > "$newfile" <<INNEREOF
+---
+id: $id
+slug: $slug_name
+title: "${title:-TODO}"
+tags: [${tags:-}]
+symptoms: []
+status: active
+supersedes: []
+related: []
+---
+# ${id} ${slug_name}
+
+INNEREOF
+
+    # Append body with §1 re-numbering
+    printf '%s\n' "$body" | sed -E 's/^## §[0-9]+/## §1/' >> "$newfile"
+
+    echo "created: ${newfile##*/}"
+  fi
+
+  cmd_re_index
+
+  if $do_push; then
+    local repo_root
+    repo_root=$(cd "$(dirname "$FIXDIR")" && pwd 2>/dev/null) || true
+    if [[ -d "$repo_root/.git" ]]; then
+      cd "$repo_root"
+      git add "$FIXDIR/" "$INDEX_FILE" 2>/dev/null || true
+      git add -u "$FIXDIR/" "$INDEX_FILE" 2>/dev/null || true
+      if git diff --cached --quiet 2>/dev/null; then
+        echo "(no changes to commit)"
+      else
+        git commit -m "fixindex(fi): ${title:-update $domain}" 2>/dev/null \
+          && git push origin main 2>/dev/null \
+          && echo "pushed" \
+          || echo "commit/push failed"
+      fi
+    else
+      echo "(no git repo, skip push)"
+    fi
+  fi
+}
 cmd_supersede() {
   [[ $# -eq 2 ]] || die "usage: fixindex supersede <old_id> <new_id>"
   local old_f new_f
@@ -188,6 +306,7 @@ main() {
     new)         cmd_new "$@" ;;
     re-index)    cmd_re_index ;;
     supersede)   cmd_supersede "$@" ;;
+    fi)          cmd_fi "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $sub (try 'fixindex help')" ;;
   esac
