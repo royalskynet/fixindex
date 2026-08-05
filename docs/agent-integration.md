@@ -19,9 +19,32 @@ When the user's message begins with the literal word `Fixindex`, the agent must 
 | `Fixindex record <fix>` / `Fixindex log <fix>` / `Fixindex new entry` | Decide the domain (run `find` first), then append a `## §N` block + add the symptom string to the frontmatter `symptoms:` array |
 | Brand-new domain, no existing fix file fits | `fixindex new <slug>` |
 | `Fixindex supersede <old>` / `<old> replaced by <new>` | `fixindex supersede <old> <new>` |
+| **`fi` — bare, nothing else in the message** | **Record what the conversation just produced.** See A.1 |
 | No hit anywhere | Fall back to whatever memory/search tool you have (`mem-search`, vector DB, etc.) |
 
 Decision order: **list first → pick subcommand**. Never blindly `grep` if the user mentioned a system name that maps cleanly to an existing fix file via `fixindex list`.
+
+### A.1 `fi` — the catch-up keyword
+
+You should already be recording an entry **as you wrap up any substantial task** — provided that task actually fixed a defect. `fi` exists for the times you didn't.
+
+A bare `fi` (nothing else in the message) means: **write it down now.** Not `fixindex list`, not "what would you like me to record?" — this is the keyword a user reaches for at the moment they stop working, and one clarifying question destroys its entire value.
+
+Steps:
+
+1. `fixindex list` — judge which domain it belongs to
+2. `fixindex find` — check for a closer existing file
+3. Existing file → append `## §N` + extend frontmatter `symptoms:`; otherwise `fixindex new <slug>`
+4. `fixindex re-index` — only when you created a file
+
+What to write: the **root-cause formula, supporting data, the paths already ruled out, and any portable rule**. Not a changelog of edits. **Record it even when the fix isn't implemented** — write "not fixed", note the next step, and stop. The diagnosis is the asset; it's what stops the next person re-deriving it.
+
+For scripted or piped capture, the `fi` subcommand reads the body from stdin and matches the domain itself:
+
+```bash
+printf '**Symptom:** ...\n**Root cause:** ...\n**Fix:** ...\n**Verify:** ...\n' \
+  | fixindex fi redis --title "Redis cluster failover" --tags redis,cluster
+```
 
 ---
 
@@ -125,6 +148,14 @@ place), Verify as a one-off reading (it must be a rerunnable command with an
 expected result), Fix as project progress ("fixed in Phase 3"), metrics or
 PIDs in `symptoms:`, several defects in one entry, sign-off checklists, or
 secrets — not even a truncated key prefix.
+
+Record an entry as you wrap up any substantial task — provided it actually
+fixed a defect. When you miss one, the user types a bare `fi` (nothing else
+in the message): that means record what this conversation just produced,
+right now. Do not ask what to write and do not run `list` at them. Write the
+root-cause formula, supporting data, paths already ruled out, and any
+portable rule — not a changelog. Record it even when the fix is not
+implemented yet: say "not fixed" and note the next step.
 
 The user may also use the explicit keyword `Fixindex <question>` to force
 an entry. Dispatch by intent: find / show / grep / new / supersede / list.

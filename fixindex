@@ -46,6 +46,18 @@ Commands:
   fixindex fi <domain>            append fix entry from stdin (auto-match + commit)
   fixindex help                 this message
 
+What belongs in an entry:
+  Write one after you FIX A DEFECT — not when a phase, task or session ends.
+  Symptom before narrative: if you cannot write a Symptom someone would grep
+  for, it is a status report, not an entry. Keep Verify a rerunnable command.
+  See fixes/.template.md for the full do-not-write list.
+
+Agent keyword:
+  A bare `fi` from the user means "record what this conversation just
+  produced, now" — the catch-up for a wrap-up that missed one. Agents should
+  act on it immediately rather than asking what to write. See
+  docs/agent-integration.md A.1.
+
 Env:
   FIXINDEX_DIR    override fixes/ dir (default: ./fixes)
   FIXINDEX_INDEX  override FIX-INDEX.md path (default: ./FIX-INDEX.md)

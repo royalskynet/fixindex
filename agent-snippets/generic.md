@@ -21,6 +21,17 @@ command with an expected result), Fix as project progress ("fixed in
 Phase 3"), metrics or PIDs in `symptoms:`, several defects in one entry,
 sign-off checklists, or secrets — not even a truncated key prefix.
 
+Record an entry as you wrap up any substantial task — provided it actually
+fixed a defect. When you miss one, the user types a bare `fi` (nothing else
+in the message): that means record what this conversation just produced,
+right now. Do not ask what to write and do not run `list` at them — one
+clarifying question and the point is lost. Judge the domain, `find` for a
+closer existing file, append `## §N` (or `fixindex new <slug>`), extend
+`symptoms:`, and `re-index` only if you created a file. Write the
+root-cause formula, supporting data, paths already ruled out, and any
+portable rule — not a changelog. Record it even when the fix is not
+implemented yet: say "not fixed" and note the next step.
+
 The user may also use the explicit keyword `Fixindex <question>` to
 force an entry. Dispatch by intent: list / find / show / grep / new /
 supersede. Decision order: list first to spot the matching domain, then

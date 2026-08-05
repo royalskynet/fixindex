@@ -144,10 +144,39 @@ After installing the agent snippet, you don't need to type `fixindex` by hand. J
 | "How did we fix this last time?", "Any prior solution?" | `fixindex find` to search history |
 | "Fixed it", "that worked", "log this fix" | Auto-appends `## §N` block + updates `symptoms:` array |
 | Brand-new domain, no matching fix file | `fixindex new <slug>` → fills scaffold |
+| **`fi` (on its own, nothing else in the message)** | **Catch-up keyword** — record what the conversation just produced; see below |
 
 > **How it works**: The agent handles intent → selects command → executes CLI. `fixindex` itself stays a deterministic CLI — NL understanding lives in the agent layer, keeping the tool reliable.
 
-Two trigger modes: **explicit keyword** (`Fixindex <question>`) when you want control; **implicit triggers** (naming a system + symptom, pasting a log, saying "fixed it") so the agent consults or records automatically without you having to remember.
+Two trigger modes: **explicit keywords** (`Fixindex <question>`, `fi`) when you want control; **implicit triggers** (naming a system + symptom, pasting a log, saying "fixed it") so the agent consults or records automatically without you having to remember.
+
+### Wrap-up writes an entry; `fi` is the catch-up
+
+With a snippet installed, the agent should record an entry **as it wraps up any substantial task** — provided that task actually fixed a defect (if it didn't, it writes nothing; see the section above).
+
+When it misses one, you type two characters:
+
+```
+fi
+```
+
+A bare `fi` (nothing else in the message) means **record what this conversation just produced, now**. Not "list the entries", not "what would you like me to write" — one clarifying question and the point is lost. The value of `fi` is zero-friction capture at the moment you stop working.
+
+On receiving `fi` the agent should:
+
+1. `fixindex list` to judge which domain it belongs to
+2. `fixindex find` to check for a closer existing file
+3. Existing file → append `## §N` and extend the frontmatter `symptoms:`; otherwise `fixindex new <slug>`
+4. `fixindex re-index` (only needed when a new file was created)
+
+What goes in is the **root-cause formula, the supporting data, the paths already ruled out, and any portable rule** — not a changelog of what was edited. **Record it even when the fix isn't implemented yet**: say "not fixed", note the next step, and move on. The diagnosis is the asset — it's what saves the next person from re-deriving it.
+
+You can also pipe an entry straight in (the `fi` subcommand reads the body from stdin and matches the domain for you):
+
+```bash
+printf '**Symptom:** ...\n**Root cause:** ...\n**Fix:** ...\n**Verify:** ...\n' \
+  | fixindex fi redis --title "Redis cluster failover" --tags redis,cluster
+```
 
 ## Using with LLM coding agents
 
