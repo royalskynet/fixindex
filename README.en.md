@@ -93,6 +93,30 @@ related: []
 
 The `symptoms:` array in frontmatter is the **search index** — that's what `fixindex find` actually scans. Think of it as "the error strings you'd type into the shell next time this happens." The `## §N` body is the human-readable runbook.
 
+## What belongs here — symptom before narrative
+
+A fix log holds **reproducible, work-saving technical notes**, not a record of what happened.
+
+**Write an entry after you fix a defect.** Not when a phase completed, a task shipped, or a session wrapped up. Diagnosis without a fix still counts — write it, mark it "not fixed yet", and record the next step; the diagnosis is the asset that stops the next person re-deriving it.
+
+The test is mechanical: **if you can't write a `Symptom` someone would plausibly type into a search box, you don't have an entry.** You have a status report. Put it somewhere else.
+
+| Don't | Why | Instead |
+|---|---|---|
+| Dates in filenames — `0042-thing-20250105.md` | The entry is about the defect, not the day | `0042-thing.md` |
+| `## §N Correction (date)` sections | Amending your own earlier write-up is a conversation artifact | Edit §1 in place |
+| `Verify` as a one-off reading — "quota 348/1000, error rate 2.3%" | Tomorrow it reads differently and proves nothing | A rerunnable command **plus its expected result** |
+| `Fix` as project progress — "Phase 3 introduced the new pool", "fixed in Block B" | Meaningless once that document is gone | The command or the diff |
+| Metrics in `symptoms:` — "50.8% / 49.2%", "PID 81681", "6 occurrences on 2025-01-05" | Nobody will ever type that into a search | Only strings you'd actually grep |
+| Several defects in one entry | Breaks one-entry-per-defect; those sections share only an afternoon | Split them |
+| Sign-off checklists — F1 ✅ / F2 ✅ / PIDs unchanged | Stale within hours | Drop them; keep the rerunnable Verify |
+| Pointers to throwaway docs — "see Block B of plan-xyz.md" | External docs disappear | Inline what matters |
+| Secrets, even a truncated key prefix | "To show which one it was" is never a reason | Reference the variable name |
+
+**Why this matters.** Entries written symptom-first stay useful for years — someone hits the same error string and lands straight on the answer. Entries written narrative-first become unsearchable the moment you forget the project's vocabulary, and they push the real fixes down the index. One is a runbook; the other is a diary.
+
+**On phase-based workflows.** If your process says "each phase updates the runbook", resist mapping phases onto entries. A phase that fixed three defects produces three entries; a phase that fixed none produces zero. **Phase-driven writing is the most reliable way to fill a runbook with diaries.**
+
 ## Commands
 
 | Command | What it does |

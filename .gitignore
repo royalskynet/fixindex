@@ -2,3 +2,7 @@
 *.tmp
 .DS_Store
 .legacy/
+
+# Personal fix logs never belong in this repo — it ships only the CLI.
+# Keep your runbook in a separate (private) checkout and point FIXINDEX_DIR at it.
+fixes/[0-9]*.md

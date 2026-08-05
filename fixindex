@@ -9,10 +9,27 @@ set -euo pipefail
 FIXDIR="${FIXINDEX_DIR:-$PWD/fixes}"
 INDEX_FILE="${FIXINDEX_INDEX:-$PWD/FIX-INDEX.md}"
 RG="${RG:-rg}"
+FIXDIR_IS_DEFAULT=$([[ -n "${FIXINDEX_DIR:-}" ]] && echo 0 || echo 1)
 
 die() { echo "fixindex: $*" >&2; exit 1; }
 
 [[ -d "$FIXDIR" ]] || die "fixes dir missing: $FIXDIR"
+
+# The cwd-relative default is convenient for a quick look but dangerous for
+# writes: run a write command from the wrong directory and the entry lands in
+# a second, silent runbook that `find` will never search from anywhere else.
+# Warn (don't block) so scripted use keeps working.
+warn_if_default_dir() {
+  [[ "$FIXDIR_IS_DEFAULT" == 1 ]] || return 0
+  cat >&2 <<EOF
+fixindex: WARNING — FIXINDEX_DIR is not set, writing to the current directory:
+    $FIXDIR
+If that is not your runbook, this creates a second one that no other shell
+will ever search. Set it once and forget it:
+    export FIXINDEX_DIR="\$HOME/notes/runbook/fixes"
+    export FIXINDEX_INDEX="\$HOME/notes/runbook/FIX-INDEX.md"
+EOF
+}
 
 cmd_help() {
   cat <<'EOF'
@@ -303,10 +320,10 @@ main() {
     grep)        cmd_grep "$@" ;;
     show)        cmd_show "$@" ;;
     list)        cmd_list ;;
-    new)         cmd_new "$@" ;;
-    re-index)    cmd_re_index ;;
-    supersede)   cmd_supersede "$@" ;;
-    fi)          cmd_fi "$@" ;;
+    new)         warn_if_default_dir; cmd_new "$@" ;;
+    re-index)    warn_if_default_dir; cmd_re_index ;;
+    supersede)   warn_if_default_dir; cmd_supersede "$@" ;;
+    fi)          warn_if_default_dir; cmd_fi "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $sub (try 'fixindex help')" ;;
   esac

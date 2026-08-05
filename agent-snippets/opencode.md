@@ -12,6 +12,15 @@ shape (Retrospective optional — record only a lesson worth carrying),
 and add the new symptom string to the frontmatter `symptoms:` array.
 For a brand-new domain, run `fixindex new <slug>` and fill the scaffold.
 
+Write an entry only when you have **fixed a defect** — not when a phase,
+task, or session completes. *Symptom before narrative*: if you cannot write
+a Symptom someone would grep for, you have a status report, not an entry.
+Never write dates into filenames, "correction (date)" sections (edit the
+original in place), Verify as a one-off reading (it must be a rerunnable
+command with an expected result), Fix as project progress ("fixed in
+Phase 3"), metrics or PIDs in `symptoms:`, several defects in one entry,
+sign-off checklists, or secrets — not even a truncated key prefix.
+
 The user may also use the explicit keyword `Fixindex <question>` to
 force an entry. Dispatch by intent: `list` / `find` / `show` / `grep` /
 `new` / `supersede`. Decision order: `list` first to spot the matching

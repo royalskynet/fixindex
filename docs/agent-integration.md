@@ -66,6 +66,30 @@ Append shape — match the existing convention exactly:
 
 After the append, run `fixindex re-index` only if you created a new file (B.2 row 3). Appending within an existing file does not change the directory table.
 
+### B.3 What counts as an entry — symptom before narrative
+
+A fix log is a **reproducible, work-saving technical note**, not a record of what happened.
+
+Write an entry when you have **fixed a defect**. Not when a phase completed, a task shipped, or a session wrapped up. Diagnosis without a fix still qualifies — write it, mark it "not fixed yet", and record the next step; the diagnosis is the asset that stops the next person re-deriving it.
+
+The test is mechanical: **if you cannot write a `Symptom` that someone would plausibly type into a search box, you do not have an entry.** You have a status report. Put it somewhere else.
+
+| Don't | Why | Instead |
+|---|---|---|
+| Dates in filenames — `0042-thing-20250105.md` | The entry is about the defect, not the day | `0042-thing.md` |
+| `## §N Correction (date)` sections | Amending your own earlier write-up is a conversation artifact | Edit §1 in place |
+| `Verify` as a one-off reading — "quota 348/1000, error rate 2.3%" | Tomorrow it reads differently and proves nothing | A rerunnable command **plus its expected result** |
+| `Fix` as project progress — "Phase 3 introduced the new pool", "fixed in Block B" | Meaningless once that document is gone | The command or the diff |
+| Metrics in `symptoms:` — "50.8% / 49.2%", "PID 81681", "6 occurrences on 2025-01-05" | Nobody will ever type that into a search | Only strings you would actually grep |
+| Several defects in one entry | Breaks one-entry-per-defect; sections that share only an afternoon | Split them |
+| Sign-off checklists — F1 ✅ / F2 ✅ / PIDs unchanged | Stale within hours | Omit; keep the rerunnable Verify |
+| Pointers to throwaway docs — "see Block B of plan-xyz.md" | External docs disappear | Inline what matters |
+| Secrets, even truncated key prefixes | Never justified "to show which one it was" | Reference the variable name |
+
+**Why this matters.** Entries written symptom-first stay useful for years — someone hits the same error string and lands straight on the answer. Entries written narrative-first become unsearchable the moment you forget the project vocabulary, and they push the real fixes down the index. One is a runbook; the other is a diary.
+
+**A note on phase-based workflows.** If your process says "each phase updates the runbook", resist mapping phases onto entries. A phase that fixed three defects produces three entries; a phase that fixed none produces zero. Phase-driven writing is the single most reliable way to fill a runbook with diaries.
+
 ---
 
 ## Why two modes
@@ -92,6 +116,15 @@ After solving a new bug, append a `## §N {title}` block to the matching fix
 file using the Symptom / Root cause / Fix / Verify shape, and add the new
 symptom string to the frontmatter `symptoms:` array. For a brand-new domain,
 run `fixindex new <slug>` then fill the scaffold.
+
+Write an entry only when you have fixed a defect — not when a phase, task,
+or session completes. Symptom before narrative: if you cannot write a Symptom
+someone would grep for, you have a status report, not an entry. Never write
+dates into filenames, "correction (date)" sections (edit the original in
+place), Verify as a one-off reading (it must be a rerunnable command with an
+expected result), Fix as project progress ("fixed in Phase 3"), metrics or
+PIDs in `symptoms:`, several defects in one entry, sign-off checklists, or
+secrets — not even a truncated key prefix.
 
 The user may also use the explicit keyword `Fixindex <question>` to force
 an entry. Dispatch by intent: find / show / grep / new / supersede / list.
