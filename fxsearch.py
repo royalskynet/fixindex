@@ -169,11 +169,26 @@ def main():
     if len(sys.argv) < 2:
         print("usage: fxsearch.py <query> [--limit N] [--all] [--json]", file=sys.stderr)
         sys.exit(1)
-    q = sys.argv[1]
+    # Walk flags before positional
+    args = sys.argv[1:]
     limit = 8
-    if '--limit' in sys.argv:
-        limit = int(sys.argv[sys.argv.index('--limit') + 1])
-    json_out = '--json' in sys.argv
+    json_out = False
+    q = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '--json':
+            json_out = True
+        elif a == '--limit' and i+1 < len(args):
+            limit = int(args[i+1])
+            i += 1
+        elif not a.startswith('--'):
+            if q is None:
+                q = a
+        i += 1
+    if q is None:
+        print("usage: fxsearch.py <query> [--limit N] [--json]", file=sys.stderr)
+        sys.exit(1)
     fixdir = os.environ.get('FIXINDEX_DIR', os.path.expanduser('~/.claude/projects/-Users-51mini/memory/fixes'))
     entries = build_entries(fixdir)
     if not entries:
