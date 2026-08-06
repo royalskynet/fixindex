@@ -13,6 +13,38 @@ FIXDIR_IS_DEFAULT=$([[ -n "${FIXINDEX_DIR:-}" ]] && echo 0 || echo 1)
 
 die() { echo "fixindex: $*" >&2; exit 1; }
 
+slugify() {
+  local input="$1"
+  local result
+  result=$(echo "$input" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g;s/--*/-/g;s/^-//;s/-$//')
+  if [[ -z "$result" ]]; then
+    die "slug normalized to empty string. provide ASCII slug, or file will be unfindable (got: $input)"
+  fi
+  if [[ "$result" != "$input" ]]; then
+    echo "fixindex: slug normalized: $input -> $result" >&2
+  fi
+  echo "$result"
+}
+
+with_lock() {
+  local lockdir="$FIXDIR/.fixindex.lock"
+  # 用整數重試次數計時，不要用 bc 產浮點 —— bash 的 (( )) 不吃小數，
+  # 逾時判斷會每輪報 syntax error 而永遠不成立，變成無限等待。
+  local tries=0 max_tries=100   # 100 × 0.1s = 10s
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    if (( tries >= max_tries )); then
+      die "another fixindex write is in progress (lock timeout after 10s). If no other fixindex is running, remove the stale lock: rmdir '$lockdir'"
+    fi
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  # Execute in subshell so trap is scoped properly
+  (
+    trap 'rmdir "$lockdir" 2>/dev/null' EXIT INT TERM
+    "$@"
+  )
+}
+
 [[ -d "$FIXDIR" ]] || die "fixes dir missing: $FIXDIR"
 
 # The cwd-relative default is convenient for a quick look but dangerous for
@@ -41,6 +73,7 @@ Commands:
   fixindex show <id>            cat fixes/NNNN-*.md
   fixindex list                 list all fix files with title
   fixindex new <slug>           scaffold next-numbered fix file
+  fixindex doctor [--fix]       diagnose and repair corrupted frontmatter
   fixindex re-index             regenerate FIX-INDEX.md directory table
   fixindex supersede <old> <new>  mark old superseded by new
   fixindex fi <domain>            append fix entry from stdin (auto-match + commit)
@@ -57,6 +90,11 @@ Agent keyword:
   produced, now" — the catch-up for a wrap-up that missed one. Agents should
   act on it immediately rather than asking what to write. See
   docs/agent-integration.md A.1.
+
+Doctor:
+  Checks for: (1) wrapped frontmatter (memory-node schema), (2) filename/id mismatch,
+  (3) duplicate ids, (4) stub entries (empty/TODO titles), (5) filenames with spaces.
+  Auto-repairs (1) and (2) with --fix; others are manual. See `fixindex doctor --help`.
 
 Env:
   FIXINDEX_DIR    override fixes/ dir (default: ./fixes)
@@ -130,10 +168,33 @@ next_id() {
 
 cmd_new() {
   [[ $# -ge 1 ]] || die "usage: fixindex new <slug>"
+  local input="$1"
+
+  # Check for flags
+  if [[ "$input" == -h ]] || [[ "$input" == --help ]]; then
+    cmd_help
+    exit 0
+  fi
+  if [[ "$input" == -* ]]; then
+    die "slug must not start with '-' (got: $input)"
+  fi
+
+  local slug
+  slug=$(slugify "$input")
+
+  with_lock _cmd_new_write "$slug"
+}
+
+_cmd_new_write() {
   local slug="$1" id newfile
   id=$(next_id)
   newfile="$FIXDIR/${id}-${slug}.md"
-  [[ -e "$newfile" ]] && die "exists: $newfile"
+
+  # Double-check no collision with same id (different slug)
+  for existing in "$FIXDIR/${id}-"*.md; do
+    [[ -e "$existing" ]] && die "id collision: $id already used by $(basename "$existing")"
+  done
+
   cat > "$newfile" <<EOF
 ---
 id: $id
@@ -158,9 +219,27 @@ EOF
 }
 
 cmd_re_index() {
+  # Lightweight check: warn if wrapped frontmatter detected
+  # (don't block re-index, just alert)
+  local wrapped_check=""
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+    if _is_wrapped_frontmatter "$f"; then
+      wrapped_check+=$'  '"$(basename "$f")"$'\n'
+    fi
+  done
+  if [[ -n "$wrapped_check" ]]; then
+    {
+      echo "fixindex: WARNING — wrapped frontmatter detected in:"
+      echo "$wrapped_check"
+      echo "Run \`fixindex doctor --fix\` to repair"
+    } >&2
+  fi
+
   local tmp tbl
   tmp=$(mktemp)
   tbl=$(mktemp)
+  local todo_list=""
   {
     echo "| ID | Slug | Title | Tags |"
     echo "|----|------|-------|------|"
@@ -170,10 +249,16 @@ cmd_re_index() {
       base=$(basename "$f" .md)
       id="${base%%-*}"
       slug="${base#*-}"
-      title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$f")
+      title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); gsub(/^"/,""); gsub(/"$/,""); print; exit}' "$f")
       tags=$(awk '/^tags:/ {sub(/^tags:[[:space:]]*/,""); gsub(/[\[\]]/,""); print; exit}' "$f")
       status=$(awk '/^status:/ {sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
       [[ "$status" == "superseded" ]] && id="~~$id~~"
+
+      # Check if title is empty or exactly "TODO"
+      if [[ -z "$title" ]] || [[ "$title" == "TODO" ]]; then
+        todo_list+=$'\n'"    $id  $slug"
+      fi
+
       printf "| %s | %s | %s | %s |\n" "$id" "$slug" "${title:-TODO}" "${tags:-}"
     done
   } > "$tbl"
@@ -189,6 +274,15 @@ cmd_re_index() {
   mv "$tmp" "$INDEX_FILE"
   rm -f "$tbl"
   echo "re-indexed: $INDEX_FILE"
+
+  # Warn about unfilled scaffolds if any
+  if [[ -n "$todo_list" ]]; then
+    {
+      echo "fixindex: WARNING — $(echo "$todo_list" | grep -c .) entries still have a TODO title (unfilled scaffolds):"
+      echo "$todo_list"
+      echo "Fill in \`title:\` / \`tags:\` / \`symptoms:\` or they will never be found by \`fixindex find\`."
+    } >&2
+  fi
 }
 
 # Find best matching fix file for a domain keyword (case-insensitive slug/title match)
@@ -221,6 +315,12 @@ cmd_fi() {
   [[ $# -ge 1 ]] || die "usage: fixindex fi <domain-keyword> [--title TITLE] [--tags t1,t2] [--push]"$'\n  Reads body from stdin'
 
   local domain="$1"
+
+  # Check for flag in domain
+  if [[ "$domain" == -* ]]; then
+    die "domain must not start with '-' (got: $domain)"
+  fi
+
   shift
   local title="" tags="" do_push=false
 
@@ -236,6 +336,12 @@ cmd_fi() {
   local body
   body=$(cat)
   [[ -n "$body" ]] || die "no body provided on stdin"
+
+  with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$body"
+}
+
+_cmd_fi_write() {
+  local domain="$1" title="$2" tags="$3" do_push="$4" body="$5"
 
   local target
   target=$(find_domain_file "$domain")
@@ -257,12 +363,16 @@ cmd_fi() {
     echo "appended: ${target##*/} (§${next_n})"
   else
     local slug_name
-    slug_name=$(echo "$domain" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g;s/--*/-/g;s/^-//;s/-$//')
-    [[ -n "$slug_name" ]] || slug_name="fix"
+    slug_name=$(slugify "$domain")
 
     local id newfile
     id=$(next_id)
     newfile="$FIXDIR/${id}-${slug_name}.md"
+
+    # Double-check no collision with same id
+    for existing in "$FIXDIR/${id}-"*.md; do
+      [[ -e "$existing" ]] && die "id collision: $id already used by $(basename "$existing")"
+    done
 
     # Write frontmatter + template
     cat > "$newfile" <<INNEREOF
@@ -288,7 +398,7 @@ INNEREOF
 
   cmd_re_index
 
-  if $do_push; then
+  if [[ "$do_push" == "true" ]]; then
     local repo_root
     repo_root=$(cd "$(dirname "$FIXDIR")" && pwd 2>/dev/null) || true
     if [[ -d "$repo_root/.git" ]]; then
@@ -308,6 +418,392 @@ INNEREOF
     fi
   fi
 }
+# Extract frontmatter block (lines between --- markers, excluding the markers)
+_get_frontmatter() {
+  local f="$1"
+  sed -n '2,/^---$/p' "$f" | sed '$d'
+}
+
+# Check if frontmatter is wrapped in memory-node schema (has metadata: or name: "")
+_is_wrapped_frontmatter() {
+  local f="$1"
+  local fm
+  fm=$(_get_frontmatter "$f")
+  echo "$fm" | grep -q -E "^(metadata:|name:[[:space:]]*\"\")" && return 0 || return 1
+}
+
+# Extract id from frontmatter (handles both "id: 334" and "id: 0334")
+_extract_fm_id() {
+  local f="$1"
+  awk '/^id:/ {sub(/^id:[[:space:]]*/,""); gsub(/"/, ""); print; exit}' "$f"
+}
+
+# Extract title from frontmatter (top-level only, not in metadata:)
+_extract_fm_title() {
+  local f="$1"
+  _get_frontmatter "$f" | awk '/^title:/ {sub(/^title:[[:space:]]*/,""); gsub(/^"/,""); gsub(/"$/,""); print; exit}'
+}
+
+# Repair wrapped frontmatter: flatten memory-node schema back to fixindex schema
+_repair_wrapped_fm() {
+  local f="$1" id="$2"
+  local backup="$FIXDIR/../.doctor-backup-$(basename "$f")"
+  cp "$f" "$backup" || return 1
+
+  # Use python to flatten YAML since bash YAML parsing is painful.
+  # We must preserve the body (everything after the second ---).
+  python3 - "$f" "$id" <<'PYTHON_EOF'
+import sys
+import re
+
+filepath = sys.argv[1]
+expected_id = sys.argv[2]
+
+with open(filepath, 'r') as file:
+    lines = file.read().split('\n')
+
+# Find frontmatter boundaries
+fm_start = None
+fm_end = None
+for i, line in enumerate(lines):
+    if line.strip() == '---':
+        if fm_start is None:
+            fm_start = i
+        elif fm_end is None:
+            fm_end = i
+            break
+
+if fm_start is None or fm_end is None:
+    sys.exit(1)
+
+fm_lines = lines[fm_start + 1 : fm_end]
+body_lines = lines[fm_end + 1:]
+
+# Parse frontmatter: collect fields (including multi-line arrays)
+fields = {}
+in_metadata = False
+metadata_base_indent = None
+current_key = None
+current_lines = []
+
+for line in fm_lines:
+    # Check for metadata: marker
+    if line.startswith('metadata:'):
+        if current_key:
+            fields[current_key] = current_lines
+        in_metadata = True
+        metadata_base_indent = len(line) - len(line.lstrip())
+        current_key = None
+        current_lines = []
+        continue
+
+    # Check for end of metadata block (non-indented content)
+    if in_metadata and line and not line[0].isspace():
+        if current_key:
+            fields[current_key] = current_lines
+        in_metadata = False
+        current_key = None
+        current_lines = []
+
+    # Skip name field and non-key lines
+    if line.startswith('name:') or line.strip().startswith('#'):
+        continue
+
+    # Parse top-level or metadata field
+    if in_metadata:
+        line_indent = len(line) - len(line.lstrip()) if line.strip() else 0
+        # Check if this is a key line (at metadata level)
+        if line.strip() and line_indent == metadata_base_indent + 2:
+            match = re.match(r'^(\s+)(\w+):\s*(.*)', line)
+            if match:
+                # Skip harness-specific fields
+                key = match.group(2)
+                if key not in ['node_type', 'originSessionId']:
+                    if current_key:
+                        fields[current_key] = current_lines
+                    current_key = key
+                    val = match.group(3).strip()
+                    current_lines = [val] if val else []
+        elif line.strip():
+            # Array item or sub-field: append to current_lines
+            if current_key:
+                current_lines.append(line.rstrip())
+    else:
+        # Top-level field
+        if ':' in line:
+            match = re.match(r'^(\w+):\s*(.*)', line)
+            if match:
+                key = match.group(1)
+                val = match.group(2).strip()
+                if current_key:
+                    fields[current_key] = current_lines
+                current_key = key
+                current_lines = [val] if val else []
+
+# Save last field
+if current_key:
+    fields[current_key] = current_lines
+
+# Clean up and normalize array fields
+cleaned_fields = {}
+for k, v in fields.items():
+    if isinstance(v, list):
+        val_lines = [line.strip() for line in v if line.strip()]
+    else:
+        val_lines = [str(v).strip()] if v else []
+
+    if not val_lines:
+        continue
+
+    # Check if this looks like a YAML array (lines starting with -)
+    if k in ['tags', 'symptoms', 'related', 'supersedes'] and any(line.startswith('-') for line in val_lines):
+        # Convert YAML array items to flow format: [item1, item2]
+        items = [line.lstrip('- ').strip().strip('"\'') for line in val_lines if line.startswith('-')]
+        cleaned_fields[k] = '[' + ', '.join(items) + ']' if items else '[]'
+    elif val_lines:
+        # Single-value field
+        cleaned_fields[k] = val_lines[0] if len(val_lines) == 1 else '\n'.join(val_lines)
+
+# Normalize id
+if 'id' in cleaned_fields:
+    try:
+        cleaned_fields['id'] = f"{int(cleaned_fields['id']):04d}"
+    except ValueError:
+        cleaned_fields['id'] = expected_id
+else:
+    cleaned_fields['id'] = expected_id
+
+# Ensure all standard fields exist
+standard_fields = ['id', 'slug', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'related']
+final_fields = {}
+for field in standard_fields:
+    if field in cleaned_fields and cleaned_fields[field]:
+        final_fields[field] = cleaned_fields[field]
+    else:
+        if field == 'id':
+            final_fields[field] = expected_id
+        elif field == 'status':
+            final_fields[field] = 'open'
+        else:
+            final_fields[field] = '[]' if field in ['tags', 'symptoms', 'related', 'supersedes'] else 'TODO'
+
+# Reconstruct frontmatter
+new_fm = ['---']
+for field in standard_fields:
+    if field in final_fields:
+        new_fm.append(f"{field}: {final_fields[field]}")
+new_fm.append('---')
+
+# Write file
+with open(filepath, 'w') as f:
+    f.write('\n'.join(new_fm + body_lines))
+
+print(f'repaired: {filepath}')
+PYTHON_EOF
+  return $?
+}
+
+# Main doctor command: diagnose and optionally repair frontmatter issues
+
+# 四位零填充比較用。必須用 10# 強制十進位 —— bash 的 printf %d 走 strtol base 0，
+# "0011" 會被當八進位解成 9，"0008" 直接是非法八進位而報錯並吐出半截輸出。
+# 這個 bug 曾讓 doctor 把 255 個正常檔全部誤報成 id mismatch。
+_normalize_id() {
+  local raw="${1:-}"
+  raw="${raw//[^0-9]/}"
+  [[ -n "$raw" ]] || { echo ""; return; }
+  printf "%04d" "$((10#$raw))"
+}
+
+cmd_doctor() {
+  local fix=false
+  case "${1:-}" in
+    --fix) fix=true ;;
+    --help|-h) _cmd_doctor_help; return 0 ;;
+    "") fix=false ;;
+    *) die "doctor: unknown option $1 (try 'fixindex doctor --help')" ;;
+  esac
+
+  if [[ "$fix" == "true" ]]; then
+    with_lock _cmd_doctor_fix
+  else
+    _cmd_doctor_check
+  fi
+}
+
+_cmd_doctor_help() {
+  cat <<'EOF'
+fixindex doctor — diagnose and repair corrupted frontmatter
+
+Usage:
+  fixindex doctor        diagnose only (read-only)
+  fixindex doctor --fix  auto-repair categories 1-2
+  fixindex doctor --help this message
+
+Checks 5 categories:
+  1. Wrapped frontmatter (memory-node schema with metadata: block)
+  2. ID mismatch (filename vs frontmatter id:)
+  3. Duplicate IDs (multiple files with same 4-digit prefix)
+  4. Stub entries (empty or TODO title)
+  5. Filenames with spaces
+
+Auto-repairs with --fix:
+  Categories 1-2 are auto-repaired. Categories 3-5 are reported only
+  (require manual judgment to avoid breaking cross-references).
+
+Exit codes:
+  0 = all clear or repair successful
+  1 = issues found (or repair encountered errors)
+EOF
+}
+
+_cmd_doctor_check() {
+  # Diagnose mode: read-only reporting
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=()
+  local files_checked=0
+
+  # Scan all fix files
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+    files_checked=$((files_checked+1))
+
+    local base fname id
+    base=$(basename "$f" .md)
+    fname=$(basename "$f")
+    id="${base%%-*}"
+
+    # Check 1: wrapped frontmatter
+    local is_wrapped=false
+    if _is_wrapped_frontmatter "$f"; then
+      wrapped_list+=("$fname")
+      is_wrapped=true
+    fi
+
+    # Check 2: id mismatch (only if NOT wrapped)
+    # Wrapped files will be fixed when unwrapped, so don't report separately
+    if [[ "$is_wrapped" == "false" ]]; then
+      local fm_id
+      fm_id=$(_normalize_id "$(_extract_fm_id "$f")")
+      if [[ "$fm_id" != "$id" ]]; then
+        mismatch_list+=("$fname (id: $fm_id, expect $id)")
+      fi
+    fi
+
+    # Check 4: stub entries (empty or TODO title)
+    # Note: wrapped files may show this, but it's secondary to the wrapping issue
+    local title
+    title=$(_extract_fm_title "$f")
+    if [[ -z "$title" || "$title" == "TODO" ]]; then
+      stub_list+=("$fname")
+    fi
+
+    # Check 5: filenames with spaces
+    if [[ "$fname" =~ " " ]]; then
+      space_list+=("$fname")
+    fi
+  done
+
+  # Check 3: duplicate IDs
+  local dup_ids=""
+  dup_ids=$(ls "$FIXDIR"/*.md 2>/dev/null | xargs -n1 basename | grep -oE '^[0-9]{4}' | sort | uniq -d)
+  local dup_list=()
+  if [[ -n "$dup_ids" ]]; then
+    while IFS= read -r dup_id; do
+      for f in "$FIXDIR"/${dup_id}-*.md; do
+        [[ -e "$f" ]] && dup_list+=("$(basename "$f")")
+      done
+    done <<<"$dup_ids"
+  fi
+
+  # Report issues
+  local has_issues=false
+
+  if [[ ${#wrapped_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "wrapped frontmatter (${#wrapped_list[@]} files):"
+    printf '  %s\n' "${wrapped_list[@]}"
+  fi
+
+  if [[ ${#mismatch_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "id mismatch (${#mismatch_list[@]} files):"
+    printf '  %s\n' "${mismatch_list[@]}"
+  fi
+
+  if [[ ${#dup_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "duplicate ids (${#dup_list[@]} files):"
+    printf '  %s\n' "${dup_list[@]}"
+  fi
+
+  if [[ ${#stub_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "stub entries (${#stub_list[@]} files):"
+    printf '  %s\n' "${stub_list[@]}"
+  fi
+
+  if [[ ${#space_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "filenames with spaces (${#space_list[@]} files):"
+    printf '  %s\n' "${space_list[@]}"
+  fi
+
+  # Summary
+  if [[ "$has_issues" == "false" ]]; then
+    echo "doctor: all clear ($files_checked files checked)"
+    return 0
+  else
+    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]}))
+    echo ""
+    echo "doctor: 5 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2)"
+    return 1
+  fi
+}
+
+_cmd_doctor_fix() {
+  # Repair mode: auto-fix categories 1-2
+  local fixed_wrapped=0 fixed_mismatch=0 repair_errors=0
+
+  # Scan all fix files
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    [[ -e "$f" ]] || continue
+
+    local base id
+    base=$(basename "$f" .md)
+    id="${base%%-*}"
+
+    # Repair 1: wrapped frontmatter (takes priority)
+    local is_wrapped=false
+    if _is_wrapped_frontmatter "$f"; then
+      if _repair_wrapped_fm "$f" "$id"; then
+        fixed_wrapped=$((fixed_wrapped+1))
+        is_wrapped=true
+      else
+        repair_errors=$((repair_errors+1))
+      fi
+    fi
+
+    # Repair 2: id mismatch (only if NOT wrapped)
+    if [[ "$is_wrapped" == "false" ]]; then
+      local fm_id
+      fm_id=$(_normalize_id "$(_extract_fm_id "$f")")
+      if [[ "$fm_id" != "$id" ]]; then
+        sed -i '' "s/^id:[[:space:]]*[0-9]*/id: $id/" "$f" && fixed_mismatch=$((fixed_mismatch+1)) || repair_errors=$((repair_errors+1))
+      fi
+    fi
+  done
+
+  # Report results
+  if [[ $repair_errors -eq 0 ]]; then
+    echo "doctor: repaired $fixed_wrapped wrapped frontmatter, $fixed_mismatch id mismatches"
+    # Re-run check to confirm
+    _cmd_doctor_check
+  else
+    echo "doctor: repair completed with $repair_errors errors" >&2
+    return 1
+  fi
+}
+
 cmd_supersede() {
   [[ $# -eq 2 ]] || die "usage: fixindex supersede <old_id> <new_id>"
   local old_f new_f
@@ -333,6 +829,7 @@ main() {
     show)        cmd_show "$@" ;;
     list)        cmd_list ;;
     new)         warn_if_default_dir; cmd_new "$@" ;;
+    doctor)      warn_if_default_dir; cmd_doctor "$@" ;;
     re-index)    warn_if_default_dir; cmd_re_index ;;
     supersede)   warn_if_default_dir; cmd_supersede "$@" ;;
     fi)          warn_if_default_dir; cmd_fi "$@" ;;
