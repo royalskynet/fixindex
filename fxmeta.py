@@ -8,49 +8,53 @@ import sys, os, json, re, glob, collections
 # ── parser ──────────────────────────────────────────────────────
 RE_FM_DELIM = re.compile(r'^---\s*$')
 RE_KV = re.compile(r'^([a-z_]+):\s*(.*)$')
-RE_LIST_ITEM = re.compile(r'^  -\s+(.+)$')
+RE_LIST_ITEM = re.compile(r'^\s*-\s+(.+)$')
 
 def parse_frontmatter(text):
-    """Return (dict, body_offset). dict keys: all frontmatter fields. lists are flat arrays."""
+    """Return (dict, body_offset). Handles simple frontmatter including block lists."""
     lines = text.split('\n')
     if not lines or not RE_FM_DELIM.match(lines[0]):
         return {}, 0
     fm = {}
+    current_key = None
     i = 1
     while i < len(lines):
         if RE_FM_DELIM.match(lines[i]):
             return fm, i + 1
         line = lines[i]
-        # empty line
-        if line.strip() == '':
+        stripped = line.strip()
+        if stripped == '':
+            # reset current key on blank line
+            current_key = None
             i += 1
             continue
         kv = RE_KV.match(line)
         if kv:
-            key = kv.group(1)
+            current_key = kv.group(1)
             val = kv.group(2).strip()
-            if val == '[]' or val == '':
-                fm[key] = []
-                i += 1
-                continue
-            if val.startswith('[') and val.endswith(']'):
-                # inline list
+            if val in ('', '[]'):
+                fm[current_key] = []
+            elif val.startswith('[') and val.endswith(']'):
                 inner = val[1:-1]
-                items = []
-                for x in _split_inline(inner):
-                    items.append(x.strip())
-                fm[key] = items
-                i += 1
-                continue
-            fm[key] = val
+                items = [x.strip() for x in _split_inline(inner) if x.strip()]
+                fm[current_key] = items
+            else:
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                    val = val[1:-1]
+                fm[current_key] = val
             i += 1
             continue
-        # list item continuation
+        # list item line
         li = RE_LIST_ITEM.match(line)
-        if li and isinstance(fm.get(kv and kv.group(1) or ''), list):
-            # This is a hack — we need key tracking. Re-parse simpler.
-            pass
-
+        if li and current_key:
+            item = li.group(1).strip().strip('"\'')
+            if current_key not in fm or not isinstance(fm[current_key], list):
+                fm[current_key] = []
+            fm[current_key].append(item)
+            i += 1
+            continue
+        # unrecognized line – skip
+        i += 1
     if i < len(lines) and RE_FM_DELIM.match(lines[i]):
         i += 1
     return fm, i
@@ -87,13 +91,15 @@ def parse_frontmatter_full(text):
                 items = [x.strip().strip('"\'') for x in _split_inline(inner) if x.strip()]
                 fm[current_key] = items
             else:
+                if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                    val = val[1:-1]
                 fm[current_key] = val
             i += 1
             continue
 
         li = RE_LIST_ITEM.match(line)  # match against original line (not stripped)
         if li and current_key:
-            item = li.group(1).strip().strip('"')
+            item = li.group(1).strip().strip('"\'')
             if current_key not in fm or not isinstance(fm[current_key], list):
                 fm[current_key] = []
             fm[current_key].append(item)
@@ -125,6 +131,57 @@ def _split_inline(s):
     if current.strip():
         parts.append(current)
     return parts
+
+
+def _needs_yaml_quotes(s: str) -> bool:
+    """Return True if string s needs quoting in YAML output."""
+    if s == '':
+        return True
+    # leading/trailing whitespace
+    if s != s.strip():
+        return True
+    # starts with digit and all digits (leading zero -> octal, all digits -> int)
+    if s.isdigit():
+        return True
+    # starts with 0 and all digits (covers 0045 etc.)
+    if s.startswith('0') and s.isdigit():
+        return True
+    # contains ': ' (colon-space) or ends with ':'
+    if ': ' in s or s.endswith(':'):
+        return True
+    # contains '#'
+    if '#' in s:
+        return True
+    # contains quotes
+    if '"' in s or "'" in s:
+        return True
+    # starts with YAML indicator characters
+    if s and s[0] in '-?:,[]{}&#*!|>%@`':
+        return True
+    # contains backslash
+    if '\\\\' in s:
+        return True
+    return False
+
+
+def _yaml_quote(s: str) -> str:
+    """Return YAML-safe quoted string for s. Assumes _needs_yaml_quotes(s) is True."""
+    has_double = '"' in s
+    has_single = "'" in s
+    if has_double and not has_single:
+        # use single quotes, escape internal single quotes by doubling
+        return "'" + s.replace("'", "''") + "'"
+    if has_single and not has_double:
+        # use double quotes, escape internal double quotes
+        return '"' + s.replace('"', '\\\\"') + '"'
+    if has_double and has_single:
+        # both present: use single quotes, escape internal single quotes
+        return "'" + s.replace("'", "''") + "'"
+    # no quotes inside: prefer double quotes for backslash handling
+    if '\\\\' in s:
+        return '"' + s.replace('"', '\\\\"') + '"'
+    # default: double quotes
+    return '"' + s + '"'
 
 
 # ── 已知欄位定義 ────────────────────────────────────────────
@@ -211,7 +268,10 @@ def normalize_file(path, dry=True):
             else:
                 new_fm += f'{k}:\n'
                 for item in v:
-                    new_fm += f'  - {item}\n'
+                    if _needs_yaml_quotes(item):
+                        new_fm += f'  - {_yaml_quote(item)}\n'
+                    else:
+                        new_fm += f'  - {item}\n'
         else:
             new_fm += f'{k}: {v}\n'
     # non-order fields (if any)
@@ -221,7 +281,10 @@ def normalize_file(path, dry=True):
         if isinstance(v, list):
             new_fm += f'{k}:\n'
             for item in v:
-                new_fm += f'  - {item}\n'
+                if _needs_yaml_quotes(item):
+                    new_fm += f'  - {_yaml_quote(item)}\n'
+                else:
+                    new_fm += f'  - {item}\n'
         else:
             new_fm += f'{k}: {v}\n'
     new_fm += '---\n'
