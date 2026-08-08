@@ -21,6 +21,9 @@ Each fix lives in `fixes/NNNN-<slug>.md` with a YAML frontmatter (`id / slug / t
 <!-- fixindex:table:start -->
 | ID | Slug | Title | Tags |
 |----|------|-------|------|
+| 0001 | green | Green Sample |  |
+| 0002 | red | Red Sample (missing sections) |  |
+| 0003 | unknown-domain | Test |  |
 <!-- fixindex:table:end -->
 
 > Empty after `fixindex new <slug>` — see [docs/example-session.md](docs/example-session.md) for sample fixes.

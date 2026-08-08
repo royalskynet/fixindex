@@ -68,7 +68,7 @@ cmd_help() {
 fixindex — symptom→fix lookup for personal bug runbook
 
 Commands:
-  fixindex find <keyword>       ripgrep frontmatter `symptoms:` + section titles
+  fixindex find <keyword>       BM25 + contextual blurb 語意排序（fxsearch）
   fixindex grep <keyword>       full-text ripgrep across fix files
   fixindex show <id>            cat fixes/NNNN-*.md
   fixindex list                 list all fix files with title
@@ -131,6 +131,18 @@ cmd_list() {
 }
 
 cmd_find() {
+  [[ $# -ge 1 ]] || die "usage: fixindex find <keyword> [--json] [--all] [--limit N]"
+  local self="${BASH_SOURCE[0]}"
+  [[ -L "$self" ]] && self="$(readlink "$self")"
+  local eng="${self%/*}/fxsearch.py"
+  if [[ -f "$eng" ]] && command -v python3 >/dev/null 2>&1; then
+    FIXINDEX_DIR="$FIXDIR" python3 "$eng" "$@" && return 0
+    echo "[fixindex] fxsearch unavailable, falling back to literal grep" >&2
+  fi
+  _cmd_find_literal "$@"
+}
+
+_cmd_find_literal() {
   [[ $# -ge 1 ]] || die "usage: fixindex find <keyword>"
   local kw="$1"
   # Hit 1: frontmatter symptoms array entries
@@ -312,23 +324,30 @@ count_sections() {
 
 # fi — append fix entry from stdin to domain-matched fix file
 cmd_fi() {
-  [[ $# -ge 1 ]] || die "usage: fixindex fi <domain-keyword> [--title TITLE] [--tags t1,t2] [--push]"$'\n  Reads body from stdin'
+  # Append a fix entry from stdin.
+  # New UX:
+  #   * Auto‑match protection – prints the chosen target entry (id/title) and a
+  #     simple similarity metric. If similarity is low, suggest using `--new`.
+  #   * `--new` flag forces creation of a fresh entry even when a matching
+  #     domain file exists.
+  [[ $# -ge 1 ]] || die "usage: fixindex fi <domain-keyword> [--title TITLE] [--tags t1,t2] [--push] [--new]"$'\n  Reads body from stdin'
 
   local domain="$1"
 
-  # Check for flag in domain
+  # Disallow flags as the domain argument.
   if [[ "$domain" == -* ]]; then
     die "domain must not start with '-' (got: $domain)"
   fi
 
   shift
-  local title="" tags="" do_push=false
+  local title="" tags="" do_push=false force_new=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --title) title="$2"; shift 2 ;;
       --tags) tags="$2"; shift 2 ;;
       --push) do_push=true; shift ;;
+      --new)  force_new=true; shift ;;
       *) shift ;;
     esac
   done
@@ -337,29 +356,43 @@ cmd_fi() {
   body=$(cat)
   [[ -n "$body" ]] || die "no body provided on stdin"
 
-  with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$body"
+  with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$force_new" "$body"
 }
 
 _cmd_fi_write() {
-  local domain="$1" title="$2" tags="$3" do_push="$4" body="$5"
+  local domain="$1" title="$2" tags="$3" do_push="$4" force_new="$5" body="$6"
 
   local target
   target=$(find_domain_file "$domain")
 
-  if [[ -n "$target" ]]; then
+  if [[ -n "$target" && "$force_new" != "true" ]]; then
+    # Auto‑match protection: compute a crude similarity based on keyword presence in title
+    local target_title
+    target_title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$target")
+    local similarity
+    if echo "$target_title" | grep -iq "$domain"; then
+      similarity="high"
+    else
+      similarity="low"
+    fi
+    echo "fi auto‑match: will append to ${target##*/} (title: $target_title) – similarity: $similarity"
+    if [[ "$similarity" == "low" ]]; then
+      echo "��⚠��️  Domain appears unrelated – consider using --new to force a new entry"
+    fi
+
     local next_n
     next_n=$(($(count_sections "$target") + 1))
 
     if [[ -n "$title" ]]; then
-      sed -i '' "s/^title:.*/title: \"$title\"/" "$target"
+      sed -i '' "s/^title:.*/title: \\\"$title\\\"/" "$target"
     fi
 
     # Re-number section header
     local section_body
-    section_body=$(printf '%s\n' "$body" | sed -E 's/^## §[0-9]+/## §'"${next_n}"'/')
+    section_body=$(printf '%s\\n' "$body" | sed -E 's/^## §[0-9]+/## §'"${next_n}"'/')
 
     echo "" >> "$target"
-    printf '%s\n' "$section_body" >> "$target"
+    printf '%s\\n' "$section_body" >> "$target"
     echo "appended: ${target##*/} (§${next_n})"
   else
     local slug_name
@@ -391,7 +424,7 @@ related: []
 INNEREOF
 
     # Append body with §1 re-numbering
-    printf '%s\n' "$body" | sed -E 's/^## §[0-9]+/## §1/' >> "$newfile"
+    printf '%s\\n' "$body" | sed -E 's/^## §[0-9]+/## §1/' >> "$newfile"
 
     echo "created: ${newfile##*/}"
   fi
@@ -659,7 +692,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -700,6 +733,15 @@ _cmd_doctor_check() {
     # Check 5: filenames with spaces
     if [[ "$fname" =~ " " ]]; then
       space_list+=("$fname")
+    fi
+
+    # Check 6: missing sections (non-stub entries without any ## §N headings)
+    if [[ -n "$title" && "$title" != "TODO" ]]; then
+      local nsections
+      nsections=$(count_sections "$f")
+      if [[ "$nsections" -eq 0 ]]; then
+        missing_list+=("$fname")
+      fi
     fi
   done
 
@@ -748,14 +790,20 @@ _cmd_doctor_check() {
     printf '  %s\n' "${space_list[@]}"
   fi
 
+  if [[ ${#missing_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "missing sections (${#missing_list[@]} files):"
+    printf '  %s\n' "${missing_list[@]}"
+  fi
+
   # Summary
   if [[ "$has_issues" == "false" ]]; then
     echo "doctor: all clear ($files_checked files checked)"
     return 0
   else
-    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]}))
+    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]} + ${#missing_list[@]}))
     echo ""
-    echo "doctor: 5 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2)"
+    echo "doctor: 6 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2)"
     return 1
   fi
 }

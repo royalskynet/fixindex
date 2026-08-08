@@ -6,13 +6,13 @@ Uses subprocess with stdin pipe (avoids shell escaping / big argv issues)
 import json, sys, os, hashlib, time, re, subprocess, textwrap
 
 API_URL = "http://127.0.0.1:20130/v1/chat/completions"
-API_KEY = "omniro-route-internal-key-placeholder"
+API_KEY = os.environ.get("OMNIROUTE_API_KEY", "omniro-route-internal-key-placeholder")
 MODEL = "free-tools-heavy"
 FIXDIR = os.environ.get("FIXINDEX_DIR", os.path.expanduser("~/.claude/projects/-Users-51mini/memory/fixes"))
 BLURB_PATH = os.path.join(FIXDIR, ".blurbs.jsonl")
 
 def fetch_blurb(section_text, section_heading=""):
-    """Return (blurb_text, vocab_list) or ("", []) on failure"""
+    """Return (blurb_text, vocab_list, finish_reason, completion_tokens); on failure blurb_text is ""."""
     prompt = f"""You are indexing a coding bug knowledge base.
 Below is ONE SECTION of an entry titled "{section_heading}".
 Return ONLY valid JSON, no other text, no markdown fences:
@@ -23,38 +23,67 @@ but that DO NOT appear literally in the text. Include: synonyms, English/Chinese
 higher-level concepts, related CLI tools, error message variants, file names.
 
 SECTION TEXT:
-{section_text[:3500]}"""
+{section_text[:3500]}
+"""
 
     body = json.dumps({
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
-        "max_tokens": 350,
-        "stream": False
+        "max_tokens": 4000,
+        "stream": False,
+        "reasoning_effort": "none"
     }).encode()
 
     try:
         r = subprocess.run([
-            "curl", "-sf", "-m120",
+            "curl", "-sf", "-m180",
             "-H", f"Authorization: Bearer {API_KEY}",
             "-H", "Content-Type: application/json",
             "-d", "@-",
             API_URL
-        ], input=body, capture_output=True, timeout=95)
+        ], input=body, capture_output=True, timeout=160)
         if r.returncode != 0:
-            return "", []
+            return "", [], None, None
         data = json.loads(r.stdout)
-        content = data["choices"][0]["message"]["content"].strip()
+        # Safely extract content
+        content = None
+        finish_reason = None
+        completion_tokens = None
+        if isinstance(data, dict):
+            choices = data.get("choices") or []
+            if choices:
+                message = choices[0].get("message") or {}
+                finish_reason = choices[0].get("finish_reason")
+                usage = data.get("usage") or {}
+                completion_tokens = usage.get("completion_tokens")
+                # Try content first, then reasoning_content (for reasoning models)
+                content = message.get("content")
+                if not content:
+                    content = message.get("reasoning_content")
+        if not content:
+            # No content returned; treat as failure
+            return "", [], finish_reason, completion_tokens
+        # Ensure content is string
+        if not isinstance(content, str):
+            # If it's a list or dict, try to json.dumps it? but spec expects string.
+            # We'll attempt to convert via str()
+            content = str(content)
+        content = content.strip()
         # match JSON in response
         m = re.search(r'\{[^{}]*\}', content)
         if m:
             parsed = json.loads(m.group(0))
-            return parsed.get("blurb", ""), parsed.get("vocab", [])
-        return "", []
+            return parsed.get("blurb", ""), parsed.get("vocab", []), finish_reason, completion_tokens
+        # fallback: try to parse the entire content as JSON
+        try:
+            parsed = json.loads(content)
+            return parsed.get("blurb", ""), parsed.get("vocab", []), finish_reason, completion_tokens
+        except Exception:
+            return "", [], finish_reason, completion_tokens
     except Exception as e:
         print(f"  [ERR/{section_heading[:40]}]: {e}", file=sys.stderr)
-        return "", []
-
+        return "", [], None, None
 def backfill(force=False, limit=0):
     """backfill blurbs. limit=0 means unlimited."""
     import glob
@@ -85,10 +114,10 @@ def backfill(force=False, limit=0):
                 h = hashlib.sha1(sec["content"].encode()).hexdigest()[:12]
                 if h in hashes and not force:
                     continue
-                key = f"{fn}#{i+1}"
-                blurb, vocab = fetch_blurb(sec["content"], sec["heading"])
+                key = f"{fn[:4]}#{i+1}"
+                blurb, vocab, finish_reason, completion_tokens = fetch_blurb(sec["content"], sec["heading"])
                 if not blurb:
-                    print(f"  skip {key}: no blurb returned", file=sys.stderr)
+                    print(f"  skip {key}: finish={finish_reason} tokens={completion_tokens}", file=sys.stderr)
                     continue
                 entry = {"key": key, "hash": h, "heading": sec["heading"], "blurb": blurb, "vocab": vocab, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
                 bf.write(json.dumps(entry, ensure_ascii=False) + "\n")
