@@ -377,7 +377,7 @@ _cmd_fi_write() {
     fi
     echo "fi auto‑match: will append to ${target##*/} (title: $target_title) – similarity: $similarity"
     if [[ "$similarity" == "low" ]]; then
-      echo "��⚠��️  Domain appears unrelated – consider using --new to force a new entry"
+      echo "⚠️  Domain appears unrelated – consider using --new to force a new entry"
     fi
 
     local next_n
