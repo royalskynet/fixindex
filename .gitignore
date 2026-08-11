@@ -1,4 +1,5 @@
 *.bak
+*.portablebak*
 *.tmp
 .DS_Store
 .legacy/
