@@ -8,7 +8,7 @@ import json, sys, os, hashlib, time, re, subprocess, textwrap
 API_URL = "http://127.0.0.1:20130/v1/chat/completions"
 API_KEY = os.environ.get("OMNIROUTE_API_KEY", "omniro-route-internal-key-placeholder")
 MODEL = "free-tools-heavy"
-FIXDIR = os.environ.get("FIXINDEX_DIR", os.path.expanduser("~/.claude/projects/-Users-51mini/memory/fixes"))
+FIXDIR = os.environ.get("FIXINDEX_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixes")
 BLURB_PATH = os.path.join(FIXDIR, ".blurbs.jsonl")
 
 def fetch_blurb(section_text, section_heading=""):

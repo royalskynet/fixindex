@@ -1,71 +1,78 @@
 # fixindex
 
 > 羽毛級、純檔案的個人 bug 修理日誌 — 症狀 → 解法即時查詢，借鑑 `adr-tools` 風格。
+> 往後碰上同樣錯誤，`fixindex find "<錯誤>"` 直接帶你到上次寫的解法，不用重新摸索。
 
-[English](./README.en.md)
+[English](./README.en.md) · 中文
 
-`fixindex` 是約 150 行 `bash` + `ripgrep`。無資料庫、無 daemon、無編輯器外掛。每個你解過的 bug 都進到一個 Markdown 檔 `fixes/NNNN-<slug>.md`。下次同樣的錯誤訊息再噴出來，`fixindex find "<錯誤>"` 直接跳到你上季寫的解法。
+`fixindex` 是約 150 行 `bash` + `ripgrep` 的核心 CLI，配上幾個純 Python 的語意搜尋與自動化工具。**無資料庫、無 daemon、無編輯器外掛**。每個你解過的 bug 進到一個 Markdown 檔 `fixes/NNNN-<slug>.md`，下次同樣錯誤再噴出來，一條命令直達解法。
 
-它存在的理由：
+---
 
-- 多數「第二大腦」工具太重。你想要的只是一個命令、答案直接吐到 stdout。
-- LLM coding agent（Claude Code、Codex…）每次都重新探索你已經解過的 bug，白燒 token。把它指向 `fixindex find` 再開始動手，省下幾小時的重複 debug。
+## 這套系統在做什麼
 
-## 安裝
+`fixindex` 是一份**技術經驗索引**，不是任務日誌。它的目地是讓「往後編程越來越少彎路」：
+
+- **讀**：撞到錯誤 → `fixindex find` 先查是否解過 → 直接讀解法。
+- **寫**：修好一個 defect → 補一條 `## §N` 記錄（症狀優先）→ 下次省下重推時間。
+- **自動化**：較大的開發、除錯或重大洞察時自動記錄；也可隨時手打 `fi` 補記。
+
+**判準**：寫不出一句別人會拿來搜尋的 `Symptom`，就不是 entry，是進度報告。`fixindex` 收**可復現、省下工的技術筆記**，不是「做了什麼」的流水帳。
+
+---
+
+## 快速開始（5 分鐘可用）
+
+### 1. 取得 repo
 
 ```bash
-# 1. clone 或內嵌到你的個人筆記 repo
 git clone https://github.com/royalskynet/fixindex.git ~/dev/fixindex
 cd ~/dev/fixindex
+```
 
-# 2. 把 CLI 放上 PATH
-ln -s "$PWD/fixindex" ~/.local/bin/fixindex
-# 或：echo 'export PATH="$HOME/dev/fixindex:$PATH"' >> ~/.zshrc
+### 2. 把 CLI 放上 PATH
 
-# 3. 指向你的 runbook（如果直接在這 repo 用就不用設）
+任選一種：
+
+```bash
+ln -s "$PWD/fixindex" ~/.local/bin/fixindex      # 最常見：symlink
+# 或直接把 repo 加進 PATH：
+echo 'export PATH="$HOME/dev/fixindex:$PATH"' >> ~/.zshrc
+```
+
+> **`~/.local/bin` 已在 PATH？** 先確認：`echo "$PATH" | tr ':' '\n' | grep local/bin`。沒有的話先把 `~/.local/bin` 加進 PATH。
+
+### 3. 設定 runbook 位置（重要）
+
+`fixindex` 資料（你的 fix 檔）放在**你自己的私有 checkout**，不放這個公開 repo。用環境變數指定：
+
+```bash
 export FIXINDEX_DIR="$HOME/notes/runbook/fixes"
 export FIXINDEX_INDEX="$HOME/notes/runbook/FIX-INDEX.md"
 ```
 
-需求：`bash` 4+、`ripgrep`（`brew install ripgrep`）、`awk`、`find`。macOS 與 Linux。CLI 本身不需要 Node 或 Python。
+把這兩行加進你的 shell profile。**注意三種環境都要設，缺一個就會「看不到你寫的紀錄」**：
 
-## 工作流
+| 環境 | 設定位置 | 為什麼 |
+|---|---|---|
+| 互動 shell（bash/zsh/fish） | `~/.bashrc`、`~/.zshrc` 等 | 你手敲 `fixindex` 時用到 |
+| login shell | `~/.zshenv` / `~/.bash_profile` | 某些 agent gateway 從 login shell 起 |
+| **agent / daemon 環境** | **agent 自己的 config** 或該 daemon 的 env | 背景服務常不讀你的 rc 檔 —— 這是「紀錄莫名消失」最常見的原因 |
 
-### 遇到 bug 時
+> **不設定會怎樣？** CLI 與工具 fallback 到「目前工作目錄的 `./fixes/`」或 repo 內的 `fixes/`。在錯誤目錄跑 `fixindex new` 會在第二個、沒人會搜的 runbook 裡默默建條目。`find` 從別處也找不到。所以**設定一次，以後忘了它**。
 
-```bash
-$ fixindex find "deadlock detected"
-## symptoms match:
-  0002-postgres-migrations        L7       - "ERROR: deadlock detected"
-
-(use `fixindex grep 'deadlock detected'` for full-text search)
-
-$ fixindex show 0002
-# 0002 postgres-migrations
-…
-## §1 ALTER TABLE blocks on long-running transaction
-**Symptom:** Migration hangs forever on `ALTER TABLE … ADD COLUMN`…
-**Root cause:** Another session holds an `AccessShareLock`…
-**Fix:** Set a lock timeout before the migration, retry-on-failure:
-…
-```
-
-### 修完新 bug 之後
-
-1. 追加 `## §N` 區段到對應的 domain 子檔，並把新症狀字串加進 frontmatter `symptoms:` 陣列；
-2. 或開一個全新 domain：
+### 4. 驗證安裝
 
 ```bash
-$ fixindex new redis-cluster
-/path/to/fixes/0004-redis-cluster.md
-re-indexed: /path/to/FIX-INDEX.md
+fixindex help | head
+fixindex find "postgres"    # 空結果也正常，表示搜尋管線通（你的 runbook 尚無資料）
 ```
 
-接著編輯 `fixes/0004-redis-cluster.md`，把 `Symptom / Root cause / Fix / Verify` 填上即可。
+---
 
-### 檔案結構
+## 檔案結構
 
-每個 fix 檔長這樣（範本在 `fixes/.template.md`）：
+一個 fix 檔長這樣（範本見 `fixes/.template.md`）：
 
 ```markdown
 ---
@@ -76,7 +83,6 @@ tags: [postgres, migrations, locking]
 symptoms:
   - "ERROR: deadlock detected"
   - "could not obtain lock on relation"
-  - "remaining connection slots are reserved"
 status: active
 supersedes: []
 related: []
@@ -87,113 +93,164 @@ related: []
 **Symptom:** …
 **Root cause:** …
 **Fix:** …
-**Verify:** …
-**Retrospective:** （選填）為什麼舊解法沒擋住？沒教訓就跳過。
+**Verify:** …（可重跑的指令 + 期望結果）
+**Retrospective:**（選填）為什麼舊解法沒擋住？
 ```
 
-frontmatter 的 `symptoms:` 陣列是**搜尋索引** — 那是 `fixindex find` 真正在掃的東西。把它當成「將來你會在 shell 直接打進去的錯誤訊息字串清單」。`## §N` 內文是給人讀的 runbook。
+**關鍵**：frontmatter 的 `symptoms:` 陣列是**搜尋索引** —— 那是 `fixindex find` 真正在掃的東西。把它當成「你將來會在 shell 直接打進去的錯誤訊息字串清單」。`## §N` 內文是給人讀的 runbook。
 
-## 什麼該寫進來 — 症狀先於敘事
+**domain 分組**：一個 domain 一個檔（`postgres-migrations.md` 收 10 條相關 fix），壓住檔案數但不犧牲粒度 —— 每個 `## §N` 仍可獨立引用。
 
-fixindex 收的是**可復現、省下工的技術筆記**,不是做了什麼的紀錄。
-
-**修好一個 defect 之後才寫。** 不是 phase 做完、不是任務交付、不是收工。只診斷沒修也算 — 照寫,但明寫「未修」並留下一步;診斷本身就是資產,它讓下一個人不必重推一遍。
-
-判準很機械:**如果你寫不出一句別人會拿去搜尋的 `Symptom`,你手上的就不是 entry,是進度報告。** 放別的地方。
-
-| 不要 | 為什麼 | 改成 |
-|---|---|---|
-| 日期進檔名 `0042-thing-20250105.md` | entry 講的是那個缺陷,不是那一天 | `0042-thing.md` |
-| `## §N 更正(日期)` 小節 | 對自己前一份記錄的勘誤是對話產物 | 直接回改 §1 |
-| `Verify` 寫一次性讀數 —「配額 348/1000、錯誤率 2.3%」 | 明天重跑數字就不同,證明不了任何事 | 可重跑的指令 **+ 期望結果** |
-| `Fix` 寫成專案進度 —「Phase 3 建立了新的 pool」「在 Block B 修好」 | 那份文件消失後就沒有意義 | 寫指令或 diff |
-| `symptoms:` 放數據 —「50.8% / 49.2%」「PID 81681」「2025-01-05 出現 6 次」 | 沒有人會把這串打進搜尋框 | 只放你真的會 grep 的字串 |
-| 一個 entry 塞多個缺陷 | 違反 one entry per defect;那些段落的共通點只是同一個下午 | 拆開 |
-| 收工驗收表 — F1 ✅ / F2 ✅ / PID 未變 | 幾小時後就失效 | 拿掉,留可重跑的 Verify |
-| 指向一次性文件 —「見 plan-xyz.md 的 Block B」 | 外部文件會消失 | 把重點抄進來 |
-| Secret,即使只貼前綴 | 「為了標示是哪一把」從來不是理由 | 引用變數名 |
-
-**為什麼在意這件事。** 症狀優先寫的 entry 能活好幾年 — 有人撞到同一串錯誤訊息,直接落在答案上。敘事優先寫的 entry,在你忘記那個專案的詞彙那一刻就搜不到了,而且會把真正的修法擠到索引下面。前者是 runbook,後者是日記。
-
-**關於 phase 式流程。** 如果你的流程寫著「每個 phase 更新 runbook」,不要把 phase 對應成 entry。修了三個缺陷的 phase 產出三筆;沒修到東西的 phase 產出零筆。**phase 驅動的寫法是把 runbook 填滿日記最可靠的方式。**
+---
 
 ## 命令一覽
 
 | 命令 | 作用 |
 |------|------|
-| `fixindex find <kw>` | 對 frontmatter `symptoms:` 條目做匹配。第一站。 |
-| `fixindex grep <kw>` | 跨所有 fix 檔的全文 ripgrep。`find` 沒命中時用。 |
-| `fixindex show <id>` | `cat fixes/NNNN-*.md`。 |
+| `fixindex find <kw>` | 對 frontmatter `symptoms:` 做語意搜尋（BM25，見下）。第一站。 |
+| `fixindex grep <kw>` | 跨所有 fix 檔全文 ripgrep。`find` 沒命中時用。 |
+| `fixindex show <id>` | 顯示 `fixes/NNNN-*.md`。 |
 | `fixindex list` | 每筆一行摘要。 |
 | `fixindex new <slug>` | 配下一個 ID、scaffold 檔案、刷新索引表。 |
 | `fixindex re-index` | 重生 `FIX-INDEX.md` 內 `<!-- fixindex:table -->` 區塊。冪等。 |
-| `fixindex supersede <old> <new>` | 標記 `<old>` 被 `<new>` 取代，但保留檔案。 |
+| `fixindex supersede <old> <new>` | 標記 `<old>` 被 `<new>` 取代，保留檔案。 |
+| `fixindex fi` | 從 stdin 補記一條，自動配對 domain。見「寫入」一節。 |
+| `fixindex doctor` | 診斷並修復損壞的 frontmatter。 |
 | `fixindex help` | 顯示說明。 |
 
-環境變數：`FIXINDEX_DIR`、`FIXINDEX_INDEX`、`RG`。
+環境變數：`FIXINDEX_DIR`、`FIXINDEX_INDEX`、`RG`（ripgrep 二進位路徑）。
 
-## 自然語言觸發（不用記指令）
+---
 
-安裝對應的 agent snippet 之後，你不需要手敲 `fixindex` 指令 — 直接跟 Agent 說話就夠了。Agent 判斷語意，自動選對應的子命令執行：
+## 寫入：修完 bug 之後
 
-| 你說 | Agent 自動跑 |
-|------|-------------|
-| `Fixindex` 或 `Fixindex <問題描述>` | 依語意選 `find / show / grep / new / supersede / list` |
-| 「postgres 卡住了」「redis 沒回應」（系統名 + 症狀） | `fixindex find "<關鍵字>"` → 讀命中檔 |
-| 貼上錯誤訊息、log 或 stack trace | `fixindex find "<第一條識別字串>"` |
-| 「上次怎麼修的？」「之前有解法嗎？」 | `fixindex find` 查歷史紀錄 |
-| 「修好了」「搞定了」「記一下這個解法」 | 自動 append `## §N` 區段 + 更新 `symptoms:` 陣列 |
-| 全新問題域、沒有對應的 fix 檔 | `fixindex new <slug>` → 填寫範本 |
-| **`fi`（單獨一個字，沒有其他內容）** | **補記口令** — 把「剛才這段對話」的技術成果補成一筆，見下方 |
+**修好一個 defect 才寫**，不是 phase 完成、任務交付或收工。只診斷沒修也照寫，但明寫「未修」並留下一步 —— 診斷本身就是資產。
 
-> **原理**：Agent 負責語意判斷 → 決定指令 → 執行 CLI。`fixindex` 本身仍是純確定性的 CLI — NL 理解由 agent 層承擔，保持工具本身的可靠性。
+### 方式 1：直接對應 domain（agent 常用）
 
-觸發點分兩類：**主動口令**（`Fixindex <問題>`、`fi`）讓你掌控時機；**隱性觸發**（說出症狀、貼 log、說修好了）讓 agent 在正確時間點自動查找或記錄，不需要你記得。
+找出最貼近的既有檔 → 追加 `## §N` → 把新症狀加進 frontmatter `symptoms:`。沒有貼近的檔就 `fixindex new <slug>`。
 
-### 收尾自動帶一筆，`fi` 是補救
-
-安裝 snippet 之後 agent 應該在**每個重大任務收尾時自動補一筆** — 前提是那次任務真的修好了 defect（沒修到就不寫，見上一節的判準）。
-
-漏了的時候，你只要打兩個字元：
-
-```
-fi
-```
-
-單獨的 `fi`（前後沒有其他內容）= **立刻把剛才那段對話的診斷／修復補成一筆**。不是列清單、不是問你要記什麼 — 多問一句就破功，`fi` 的價值就在收工那一刻零摩擦落地。
-
-Agent 收到 `fi` 之後應該：
-
-1. `fixindex list` 心算屬於哪個 domain
-2. `fixindex find` 確認有沒有更貼近的既有檔
-3. 有既有檔 → 追加 `## §N` 並補 frontmatter `symptoms:`；沒有 → `fixindex new <slug>`
-4. `fixindex re-index`（只有新建檔案時需要）
-
-寫進去的是**根因公式／數據佐證／已否決的路／可移植的 rule**，不是「改了什麼」的流水帳。**修法還沒實作也照樣記** — 明寫「未修」並留下一步即可，診斷本身就是資產，下次撞到同症狀不必重查一遍。
-
-也可以直接餵管線（`fi` 子命令從 stdin 讀內容，自動配對 domain）：
+### 方式 2：`fi` 子命令（從 stdin / 自動配對）
 
 ```bash
 printf '**Symptom:** ...\n**Root cause:** ...\n**Fix:** ...\n**Verify:** ...\n' \
   | fixindex fi redis --title "Redis cluster failover" --tags redis,cluster
 ```
 
-## 給 LLM coding agent 用
+`fi` 依業務關鍵字配對最貼近的 domain：
+- 有匹配 → append `## §N`
+- 無匹配 → 建新檔
+- `--new` 強制開新檔
+- `--push` 自動 git add/commit/push
 
-**多平台一鍵 snippet** 在 [`agent-snippets/`](./agent-snippets/) — 挑你工具對應的檔（Claude / Codex / Cursor / Gemini / opencode / 通用），`cat … >> <規則檔>` 就裝完。
+### 語意自動配對（`fi` 的 domain 判定）
 
-完整自然語言 dispatch 表（含範例與完整說明）見 [`docs/agent-integration.md`](./docs/agent-integration.md)。
+`fi` 的 domain 匹配是**純確定性**的：優先走 repo 內 `fxsearch.py`（BM25 語意搜尋）找出語意最相近的檔案；`fxsearch` 不可用或沒命中時，退回「任一 domain 詞 whole-word 出現在檔名/title」的子字串比對。**語意判斷由 agent 或 `fxsearch` 承擔，CLI 本身不做語意猜測** —— 這保持工具可靠，也避免把不相關條目誤併。
 
-把「我從頭探索一遍 repo」變成「我先翻 runbook」 — 同一個解法不會讓 agent 每個月重新推一次。
+`fi` 的相似度低於門檻時會**拒絕 append** 並要求 `--new`，防止污染不相關條目。
 
-## 為什麼要羽毛級
+---
+
+## 語意搜尋（`find` / `fxsearch`）
+
+```
+fixindex find <kw>        # 內部呼叫 fxsearch
+python3 fxsearch.py <kw>  # 直接呼叫 BM25 引擎
+```
+
+`fxsearch.py` 是章節級 BM25 檢索：
+- 每個 `## §N` 是獨立檢索單元
+- Fields 權重：`symptoms` 3x、`tags` 1.5x、`heading` 2x、`body` 1x
+- 支援 CJK 分詞（字符 + bigram）
+- `--json` 輸出結構化結果，供 agent/hook 消費
+
+```bash
+python3 fxsearch.py "wrapped frontmatter"                 # 文字輸出
+python3 fxsearch.py --json --limit 3 "wrapped frontmatter" # JSON
+```
+
+---
+
+## Python 工具生態
+
+| 工具 | 角色 |
+|---|---|
+| `fxsearch.py` | BM25 語意檢索（`find` 的引擎） |
+| `fxmeta.py` | frontmatter 解析/正規化/scan（單一解析權威，不依賴 PyYAML） |
+| `fxauto.py` | shadow-mode 自動建立條目 |
+| `fxblurb.py` | 為每個 § 生成 contextual blurb + 詞彙擴充（產生 `.blurbs.jsonl`，提升中文召回率） |
+| `fxadjudicate.py` | 寫入時裁決：APPEND / SUPERSEDE / NEW（用 `fxsearch` BM25） |
+
+所有工具都讀 `FIXINDEX_DIR`。**不設時 fallback 到 repo 自己的 `fixes/`，因此 clone 到任何路徑都能跑**（見「可移植性」）。
+
+---
+
+## 給 LLM coding agent 用（自動化記錄）
+
+安裝對應的 agent snippet，讓 agent 自動查詢與記錄：
+
+```bash
+cat agent-snippets/claude.md >> ~/.claude/CLAUDE.md      # Claude Code / 或 agent 的 AGENTS.md
+cat agent-snippets/codex.md   >> ~/.codex/AGENTS.md      # Codex
+cat agent-snippets/generic.md >> <你的 agent 規則檔>      # 通用
+```
+
+### 雙觸發模式
+
+**A. 顯式口令**
+- `Fixindex <問題>` → agent 依語意跑 `find / show / grep / new / supersede / list`
+- 貼錯誤訊息 / log → `find "<第一條識別串>"`
+- **`fi`（單獨一字，無其他內容）** → 補記口令：立刻把剛才的診斷/修復補成一筆。**不要問「要記什麼」** —— 多問一句就破功。
+
+**B. 隱式觸發（省心）**
+- 讀：使用者提到「某系統 + 症狀」「壞了/卡住/沉默」或貼 error → 先 `find` 再動手。
+- 寫：使用者說「修好了/搞定/記一下」→ append `## §N` + 更新 `symptoms:`。
+
+**建議的自動記錄時機**（節能、按需，不每句都記）：較大的開發、除錯或重大洞察結束時；修好 defect 時；發現可移植的 rule 時。小改動、無技術含量、純敘事不記。
+
+---
+
+## 可移植性（為什麼「clone 到哪都能跑」）
+
+- `fixindex` CLI 用 `$PWD/fixes` 當預設，repo 內可直接驗證。
+- 所有 Python 工具 fallback 到「腳本同目錄的 `fixes/`」，**不硬編任何使用者路徑**（修復前的版本硬編 `/Users/<user>/...`，導致 clone 到別處就壞）。
+- 你的真實 runbook 靠 `FIXINDEX_DIR` 指向私有 checkout，與這個公開 repo 分離。
+- 本 repo 的 `fixes/[0-9]*.md` 被 `.gitignore` 排除 —— 個人記錄不會誤 commit 進公開 repo。
+
+---
+
+## 環境需求
+
+- `bash` 4+
+- `ripgrep`（`brew install ripgrep`）— `find`/`grep` 需要
+- `awk`、`find`（macOS/Linux 內建）
+- 語意工具（`fxsearch`/`fixmeta`/`fxauto`/`fxblurb`/`fxadjudicate`）需要 `python3`
+
+CLI 本身不需要 Node 或 Python；只有語意/自動化工具需要 Python。
+
+---
+
+## 故障排除
+
+| 症狀 | 原因 | 解法 |
+|---|---|---|
+| `fixindex: fixes dir missing: <路徑>` | `FIXINDEX_DIR` 指向的目錄不存在 | `mkdir -p "$FIXINDEX_DIR"` 或修正 env |
+| `fixindex find` 空結果、但你確定寫過 | `find` 只搜 frontmatter `symptoms:`，不是全文 | 用 `fixindex grep "<內容細節>"` 全文搜 |
+| 記錄「消失」了 | agent/daemon 沒設 `FIXINDEX_DIR`，寫到別處了 | 在 agent 自身環境設 env（見「設定」表格） |
+| `fi` 拒絕 append | 相似度低，怕污染 | 用 `--new` 強制開新檔 |
+| 找不到 `rg` | ripgrep 未裝 | `brew install ripgrep`，或設 `RG` 指到系統 grep |
+| `fi` 誤併到不相關條目 | 舊版語意過寬 | 更新到新版（`fi` 用 fxsearch BM25 + 門檻拒絕） |
+
+---
+
+## 為什麼羽毛級
 
 考慮過其他方案，沒收進來的理由：
 
-- **SQLite / vector DB。** 多一個 binary 進 dotfiles、多一個 daemon 要顧。對 ~30 個 markdown 檔做 `ripgrep`，反正本來就 < 50 ms。
-- **編輯器外掛。** 綁死一個編輯器。CLI 在任何 terminal 都能用，包含 SSH 與 agent 的 `bash` 工具。
-- **一個 fix 一個檔（純 adr-tools 風格）。** 個人 bug 日誌很快會炸成幾百個只有一段內容的小檔。改用 *domain* 分組（`postgres-migrations.md` 收 10 條相關 fix）能壓住檔案數但不犧牲粒度 — 每個 `## §N` 區段仍可獨立引用。
-- **LLM 自動摘要 / 自動 tag。** 非確定性。frontmatter 就是索引 — 你手寫一次，永遠信它。
+- **SQLite / vector DB**：多一個二進位、多一個 daemon。對幾百個 markdown 檔 `ripgrep` 本來就 < 50ms。
+- **編輯器外掛**：綁死一個編輯器。CLI 在任何 terminal 都能用，含 SSH 與 agent 的 `bash` 工具。
+- **一個 fix 一個檔（純 adr-tools）**：個人 bug 日誌會炸成幾百個小檔。改用 *domain* 分組壓住檔案數。
+- **LLM 自動摘要 / tag**：非確定性。frontmatter 是索引，你手寫一次永遠信它。
 
 ## License
 
@@ -203,4 +260,4 @@ MIT — 詳見 [LICENSE](./LICENSE)。
 
 - [npryce/adr-tools](https://github.com/npryce/adr-tools) — 編號 + 自動 index 模式。
 - [danluu/post-mortems](https://github.com/danluu/post-mortems) — 證明純 markdown 就夠用。
-- [tldr-pages](https://github.com/tldr-pages/tldr) — 把「症狀優先查找」當成 UX primitive。
+- [tldr-pages](https://github.com/tldr-pages/tldr) — 把「症狀優先查找」當 UX primitive。

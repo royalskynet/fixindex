@@ -189,7 +189,7 @@ def main():
     if q is None:
         print("usage: fxsearch.py <query> [--limit N] [--json]", file=sys.stderr)
         sys.exit(1)
-    fixdir = os.environ.get('FIXINDEX_DIR', os.path.expanduser('~/.claude/projects/-Users-51mini/memory/fixes'))
+    fixdir = os.environ.get('FIXINDEX_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixes')
     entries = build_entries(fixdir)
     if not entries:
         if json_out:

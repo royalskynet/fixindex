@@ -6,9 +6,9 @@ ACE-compliant: no "rewrite existing § content" operation exists
 """
 import sys, os, json, re, hashlib, time, subprocess
 
-FXSEARCH = "/Users/51mini/dev/fixindex/fxsearch.py"
-FXMETA = "/Users/51mini/dev/fixindex/fxmeta.py"
-FIXDIR = os.environ.get("FIXINDEX_DIR", os.path.expanduser("~/.claude/projects/-Users-51mini/memory/fixes"))
+FXSEARCH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fxsearch.py")
+FXMETA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fxmeta.py")
+FIXDIR = os.environ.get("FIXINDEX_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixes")
 TEMPLATE = os.path.join(FIXDIR, ".template.md")
 DRY_RUN = False
 

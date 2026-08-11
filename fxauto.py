@@ -9,7 +9,7 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 import sys, os, json, re, time, glob as _glob
 
 FIXINDEX_DIR = os.environ.get('FIXINDEX_DIR',
-    os.path.expanduser('~/.claude/projects/-Users-51mini/memory/fixes'))
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixes'))
 
 def next_id():
     files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
