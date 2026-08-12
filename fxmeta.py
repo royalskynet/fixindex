@@ -186,7 +186,7 @@ def _yaml_quote(s: str) -> str:
 
 # ── 已知欄位定義 ────────────────────────────────────────────
 KNOWN_LISTS = {'symptoms', 'tags', 'related', 'supersedes'}
-KNOWN_SCALARS = {'id', 'slug', 'title', 'status'}
+KNOWN_SCALARS = {'id', 'slug', 'type', 'title', 'status'}
 ALLOWED_STATUS = {'active', 'superseded', 'draft', 'wontfix', 'archived'}
 STATUS_MAP = {
     'active': 'active', 'in-progress': 'active', 'open': 'active',
@@ -196,7 +196,7 @@ STATUS_MAP = {
     'wontfix': 'wontfix', 'rejected': 'wontfix',
     'archived': 'archived',
 }
-ORDER = ['id', 'slug', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'related']
+ORDER = ['id', 'slug', 'type', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'related']
 
 
 # ── core operations ──────────────────────────────────────────

@@ -30,3 +30,5 @@ mkdir -p ~/.gemini && cat agent-snippets/gemini.md >> ~/.gemini/GEMINI.md
 ```
 
 All snippets share the same dispatch rules — they differ only in tool-specific framing (CLAUDE.md uses Markdown sections, `.cursorrules` is plain text, etc.). See [`../docs/agent-integration.md`](../docs/agent-integration.md) for the full rationale and Mode A / Mode B reference.
+
+> **insight 試跑期**：`--type insight` 規則目前**只**寫在 `claude.md`（對應「fixed a defect 才寫」的例外條款）。其餘 5 檔（codex / cursor / gemini / generic / opencode）與 `docs/` 待試跑通過後再補，避免試跑期規則漂移。試跑期以 Claude Code / Mannie 這條 agent 驗證。

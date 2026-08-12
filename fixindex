@@ -180,26 +180,35 @@ next_id() {
 }
 
 cmd_new() {
-  [[ $# -ge 1 ]] || die "usage: fixindex new <slug>"
-  local input="$1"
-
-  # Check for flags
-  if [[ "$input" == -h ]] || [[ "$input" == --help ]]; then
-    cmd_help
-    exit 0
-  fi
-  if [[ "$input" == -* ]]; then
-    die "slug must not start with '-' (got: $input)"
+  [[ $# -ge 1 ]] || die "usage: fixindex new <slug> [--type defect|insight]"
+  local input="" etype="defect"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --type)
+        [[ $# -ge 2 ]] || die "usage: --type <defect|insight>"
+        etype="$2"; shift 2
+        ;;
+      -h|--help) cmd_help; exit 0 ;;
+      -*) die "slug must not start with '-' (got: $1)" ;;
+      *)
+        [[ -n "$input" ]] && die "usage: fixindex new <slug> [--type defect|insight]"
+        input="$1"; shift
+        ;;
+    esac
+  done
+  [[ -n "$input" ]] || die "usage: fixindex new <slug> [--type defect|insight]"
+  if [[ "$etype" != "defect" && "$etype" != "insight" ]]; then
+    die "invalid --type '$etype' (must be defect or insight)"
   fi
 
   local slug
   slug=$(slugify "$input")
 
-  with_lock _cmd_new_write "$slug"
+  with_lock _cmd_new_write "$slug" "$etype"
 }
 
 _cmd_new_write() {
-  local slug="$1" id newfile
+  local slug="$1" etype="${2:-defect}" id newfile
   id=$(next_id)
   newfile="$FIXDIR/${id}-${slug}.md"
 
@@ -208,7 +217,29 @@ _cmd_new_write() {
     [[ -e "$existing" ]] && die "id collision: $id already used by $(basename "$existing")"
   done
 
-  cat > "$newfile" <<EOF
+  if [[ "$etype" == "insight" ]]; then
+    cat > "$newfile" <<EOF
+---
+id: $id
+slug: $slug
+type: insight
+title: TODO
+tags: []
+symptoms: []
+status: active
+supersedes: []
+related: []
+---
+# ${id} ${slug}
+
+## §1 TODO 標題
+**Context:** TODO
+**Insight:** TODO
+**Implication:** TODO
+**Revisit-when:** TODO
+EOF
+  else
+    cat > "$newfile" <<EOF
 ---
 id: $id
 slug: $slug
@@ -227,6 +258,7 @@ related: []
 **Fix:** TODO
 **Verify:** TODO
 EOF
+  fi
   echo "$newfile"
   cmd_re_index
 }
@@ -308,6 +340,8 @@ find_domain_file() {
     id="${base%%-*}"
     slug="${base#*-}"
     title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$f")
+    # fi（defect 路徑）不 append 進 insight 檔
+    grep -q '^type:[[:space:]]*insight' "$f" && continue
     if echo "$slug $title" | grep -qiF "$kw"; then
       local n=$((10#$id))
       (( n > best_id )) && { best="$f"; best_id=$n; }
@@ -703,9 +737,14 @@ else:
     cleaned_fields['id'] = expected_id
 
 # Ensure all standard fields exist
-standard_fields = ['id', 'slug', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'related']
+standard_fields = ['id', 'slug', 'type', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'related']
 final_fields = {}
 for field in standard_fields:
+    # `type` 特例：有才寫、缺不回填，避免 defect 檔修復後多出 type
+    if field == 'type':
+        if field in cleaned_fields and cleaned_fields[field]:
+            final_fields[field] = cleaned_fields[field]
+        continue
     if field in cleaned_fields and cleaned_fields[field]:
         final_fields[field] = cleaned_fields[field]
     else:

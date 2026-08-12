@@ -21,6 +21,16 @@ expected result), Fix as project progress ("fixed in Phase 3"), metrics or PIDs
 in `symptoms:`, several defects in one entry, sign-off checklists, or secrets —
 not even a truncated key prefix.
 
+**Exception — `--type insight`**: the "fixed a defect" gate above applies to
+every non-defect case too, EXCEPT one: a session that produces a transferable
+design decision or insight (chose X over Y with rationale, an abandoned
+approach worth never re-exploring, a tuning rationale). Record it with
+`fixindex new <slug> --type insight`, fill **Context / Insight / Implication /
+Revisit-when**, and put *future lookup phrasing* in `symptoms:` (how a future
+you would ask it, not how you describe it now). Run-of-the-mill narration or
+decisions without a portable takeaway are not insights — do not record them.
+The defect gate is unchanged for everything else.
+
 Record an entry as you wrap up any substantial task — provided it actually
 fixed a defect. When you miss one, the user types a bare `fi` (nothing else
 in the message): that means record what this conversation just produced,

@@ -44,7 +44,7 @@ def _title_tokens(text):
         return {norm}
 
 
-def find_duplicate(title):
+def find_duplicate(title, etype='defect'):
     """Return (fid, overlap_ratio) if an existing title contains ALL tokens of
     the new title (tgt ⊆ ts) or shares >= OVERLAP_THRESHOLD of the existing
     title's tokens (同主題含新語彙 → still supersede).
@@ -66,6 +66,9 @@ def find_duplicate(title):
         except Exception:
             continue
         fm, _ = fxmeta.parse_frontmatter_full(txt)
+        # 同型過濾：insight 與 defect 不互相 supersede（預設 defect）
+        if str(fm.get('type') or 'defect') != etype:
+            continue
         t = fm.get('title') or os.path.basename(fp)
         ts = _title_tokens(str(t))
         if not ts:
