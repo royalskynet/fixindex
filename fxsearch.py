@@ -48,10 +48,17 @@ class BM25Engine:
         s = 0.0
         tf = self.tfmaps[i]
         for t in qtoks:
-            if t not in tf:
-                continue
-            f = tf[t]
-            s += self.idf(t) * (f * (K1 + 1)) / (f + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
+            if len(t) >= 3:
+                # prefix-fuzzy: query token may be a prefix of (or contain-segment
+                # of) a long camelCase doc token like kIOGPU vs
+                # kIOGPUCommandBufferCallbackErrorOutOfMemory. Count occ + small bonus.
+                occ = sum(1 for dk in tf if dk.startswith(t) or t.startswith(dk))
+                if occ:
+                    f = min(occ, 3)
+                    s += self.idf(t) * (f * (K1 + 1)) / (f + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
+            elif t in tf:
+                f = tf[t]
+                s += self.idf(t) * (f * (K1 + 1)) / (f + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
         return s
 
     def search(self, query, limit=8):
@@ -66,13 +73,15 @@ def parse_fm(path):
         txt = f.read()
     fm = {}
     cur = None
+    in_fm = False
     for line in txt.split('\n'):
         s = line.strip()
         if s == '---':
-            if not fm:
+            if not in_fm:
+                in_fm = True
                 continue
             break
-        if not fm:
+        if not in_fm:
             continue
         if s == '':
             cur = None
@@ -131,38 +140,47 @@ def build_entries(fixdir):
             m = re.search(r'##\s*§\d+\s+(.+)', hd)
             heading = m.group(1).strip() if m else '(untitled)'
             bi = blurbs.get(key, {})
-            toks = []
-            # heading 2x
-            toks.extend(tokenize(heading))
-            to = tokenize(heading)
-            toks += to + to
-            # symptoms 3x
-            for sx in fm.get('symptoms', []):
-                ts = tokenize(sx)
-                toks.extend(ts * 3)
-            # tags 1.5x
-            for t in fm.get('tags', []):
-                ts = tokenize(t)
-                toks.extend(ts)
-                toks.extend(ts)
-            # vocab 1.8x
-            for v in bi.get('vocab', []):
-                ts = tokenize(v)
-                toks.extend(ts)
-                toks.extend(ts)
-            # blurb 0.8x
-            ts = tokenize(bi.get('blurb', ''))
-            toks.extend(ts)
-            # body 1x
-            toks.extend(tokenize(cont))
-            entries.append({
-                'key': key,
-                'file': fn,
-                'section': f'§{sn + 1}',
-                'heading': heading,
-                'tokens': toks,
-            })
+            entries.append(_build_entry(fid, fn, sn + 1, heading, fm, bi, cont))
+
+        # Fallback: files with frontmatter but no ## § sections (legacy format)
+        # get a single whole-body entry so `find` can still reach them.
+        if not secs and fm and (fm.get('symptoms') or fm.get('tags') or body.strip()):
+            heading = str(fm.get('title') or '(untitled)')
+            entries.append(_build_entry(fid, fn, 1, heading, fm, {}, body))
     return entries
+
+
+def _build_entry(fid, fn, sn, heading, fm, bi, cont):
+    toks = []
+    # heading 2x
+    to = tokenize(heading)
+    toks += to + to
+    # symptoms 3x
+    for sx in fm.get('symptoms', []):
+        ts = tokenize(sx)
+        toks.extend(ts * 3)
+    # tags 1.5x
+    for t in fm.get('tags', []):
+        ts = tokenize(t)
+        toks.extend(ts)
+        toks.extend(ts)
+    # vocab 1.8x
+    for v in bi.get('vocab', []):
+        ts = tokenize(v)
+        toks.extend(ts)
+        toks.extend(ts)
+    # blurb 0.8x
+    ts = tokenize(bi.get('blurb', ''))
+    toks.extend(ts)
+    # body 1x
+    toks.extend(tokenize(cont))
+    return {
+        'key': f'{fid}#{sn}',
+        'file': fn,
+        'section': f'§{sn}',
+        'heading': heading,
+        'tokens': toks,
+    }
 
 
 def main():
