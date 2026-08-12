@@ -148,37 +148,16 @@ class BM25Engine:
         scores = [(i, self.score(i, qt)) for i in range(self.n)]
         return sorted([(i, s) for i, s in scores if s > 0], key=lambda x: -x[1])[:limit * 2]
 
-# ── simple fm parser ──
-RE_KV = re.compile(r'^([a-z_]+):\s*(.*)$')
-def parse_fm(path):
-    with open(path) as f:
+# ── frontmatter 解析：重用 fxmeta（單一解析權威），不再自造 parse_fm ──
+import fxmeta
+
+def _parse_file(fp):
+    """Return (fm, body_text). Uses fxmeta's authoritative parser."""
+    with open(fp) as f:
         txt = f.read()
-    fm = {}
-    cur = None
-    in_fm = False
-    for line in txt.split('\n'):
-        s = line.strip()
-        if s == '---':
-            if not in_fm:
-                in_fm = True
-                continue
-            break
-        if not in_fm:
-            continue
-        if s == '':
-            cur = None
-            continue
-        m = RE_KV.match(line)
-        if m:
-            cur = m.group(1)
-            v = m.group(2).strip()
-            fm[cur] = v if v and not v.startswith('[') else []
-        elif cur and re.match(r'^\s*-\s+', s):
-            item = re.sub(r'^\s*-\s+', '', s).strip().strip('"')
-            if not isinstance(fm.get(cur), list):
-                fm[cur] = []
-            fm[cur].append(item)
-    return fm
+    fm, bo = fxmeta.parse_frontmatter_full(txt)
+    body = txt[bo:] if bo else txt
+    return fm, body
 
 # ── entry builder ──
 def build_entries(fixdir):
@@ -196,11 +175,7 @@ def build_entries(fixdir):
     for fp in files:
         fn = os.path.basename(fp)
         fid = fn[:4]
-        fm = parse_fm(fp)
-        with open(fp) as f:
-            txt = f.read()
-        parts = txt.split('---', 2)
-        body = parts[2] if len(parts) >= 3 else txt
+        fm, body = _parse_file(fp)
         # sections
         secs = []
         cur_h = cur_b = ''
