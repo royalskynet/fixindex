@@ -5,6 +5,7 @@
 *.portablebak*
 *.tmp
 .DS_Store
+__pycache__/
 .legacy/
 
 # Personal fix logs never belong in this repo — it ships only the CLI.

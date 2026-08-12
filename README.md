@@ -208,6 +208,29 @@ cat agent-snippets/generic.md >> <你的 agent 規則檔>      # 通用
 
 **建議的自動記錄時機**（節能、按需，不每句都記）：較大的開發、除錯或重大洞察結束時；修好 defect 時；發現可移植的 rule 時。小改動、無技術含量、純敘事不記。
 
+### 一鍵自動紀錄（`auto` 一鍵直落）
+
+開發/除錯結束想快速記一筆，不需開 stdin。一行版（`auto --symptom`/`--fix`/`--tags`）：
+
+```bash
+fixindex auto --commit --title "gateway 401" --symptom "creds exhausted 401" --fix "輪換 token" --tags "hermes,gateway"
+```
+
+多行可讀版：
+
+```bash
+fixindex auto \
+  --title  "hermes gateway 401 / creds exhausted" \
+  --symptom "gateway DTNotFound; HMAC signer 回錯; creds 用完 401" \
+  --fix    "查 hermes-gateway-debug；輪換 token 後重啟" \
+  --tags   "hermes,gateway,401"
+```
+
+`--title`/`--symptom`/`--fix`（`--tags` 可省）齊時 → **非互動直落**：不讀 stdin，
+直接走 dedup → supersede → re-index 管線並回傳 JSON（`created` / `dedup` /
+`supersedes`）。`--title` 未給時以第一個 symptom 為標題。同主題含新語彙
+（overlap ≥ 60%）仍會取代舊條目，不重複建檔。
+
 ---
 
 ## 可移植性（為什麼「clone 到哪都能跑」）

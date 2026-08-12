@@ -965,7 +965,8 @@ cmd_supersede() {
 }
 
 cmd_auto() {
-  # Capture ONE experience from stdin (KEY: value lines: SYMPTOM/ROOT/FIX/VERIFY).
+  # Capture ONE experience from stdin (KEY: value lines: SYMPTOM/ROOT/FIX/VERIFY)
+  # or from --symptom/--fix/--tags flags (non-interactive one-shot).
   # One-shot pipeline: dedup → supersede → re-index (via fxauto.py --commit).
   # 自動捕捉「重大開發/除錯結束記一筆」: agent 呼叫此指令, 不記個案、只記可索引經驗。
   local self="${BASH_SOURCE[0]}"
@@ -974,12 +975,31 @@ cmd_auto() {
   if [[ ! -f "$fxauto" ]]; then
     die "fxauto.py not found next to fixindex: $fxauto"
   fi
-  local title=""
-  [[ $# -gt 1 ]] && [[ "$1" == "--title" ]] && title="$2"
+  local title="" symptom="" fix="" tags="" has_title=0 has_symptom=0 has_fix=0 has_tags=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --title)   title="$2"; has_title=1; shift 2 ;;
+      --symptom) symptom="$2"; has_symptom=1; shift 2 ;;
+      --fix)     fix="$2"; has_fix=1; shift 2 ;;
+      --tags)    tags="$2"; has_tags=1; shift 2 ;;
+      --commit|--shadow) shift ;;
+      *) die "unknown auto option: $1" ;;
+    esac
+  done
+  # 一鍵直落：--symptom/--fix/--tags 齊（title 可用首 symptom）即不讀 stdin
+  local rxargs=()
+  [[ $has_title -eq 1 ]] && rxargs+=(--title "$title")
+  [[ $has_symptom -eq 1 ]] && rxargs+=(--symptom "$symptom")
+  [[ $has_fix -eq 1 ]] && rxargs+=(--fix "$fix")
+  [[ $has_tags -eq 1 ]] && rxargs+=(--tags "$tags")
+  if [[ $has_symptom -eq 1 && $has_fix -eq 1 ]]; then
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit
+    return $?
+  fi
   local body
   body=$(cat)
   [[ -n "$body" ]] || die "no SYMPTOM provided on stdin (format: SYMPTOM: ...)"
-  FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" --title "$title" --commit <<EOF
+  FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit <<EOF
 $body
 EOF
 }
