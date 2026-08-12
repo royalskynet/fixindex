@@ -262,7 +262,15 @@ def main():
     verify = fields.get('verify', 'verified')
 
     if not sympt:
-        print("SYMPTOM required", file=sys.stderr)
+        print(
+            "SYMPTOM required — stdin expects KEY: value lines. Minimal example:\n"
+            "  echo 'SYMPTOM: web PUT /soul crashes on NUL path\n"
+            "ROOT: os.open raises ValueError, only OSError caught\n"
+            "FIX: catch (OSError, ValueError)\n"
+            "VERIFY: pytest tests/x.py -q -> N passed' | fixindex auto --tags a,b\n"
+            "(or pass --symptom/--fix/--tags flags without stdin)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     symps = [s.strip() for s in sympt.split(';') if s.strip()]

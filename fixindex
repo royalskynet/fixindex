@@ -6,6 +6,14 @@ set -euo pipefail
 
 # Defaults look in the current working directory. Override with env vars
 # (FIXINDEX_DIR / FIXINDEX_INDEX) to point at your own runbook checkout.
+# 若未設定 → 從 ~/.zshenv 單一源自動讀取（worker 不必自己 export）。
+# eval 而非 sed 抽值：BSD sed 不吃 \+，且 zshenv 的值含 $HOME 需要展開。
+if [[ -z "${FIXINDEX_DIR:-}" && -f "$HOME/.zshenv" ]]; then
+  eval "$(grep '^export FIXINDEX_DIR=' "$HOME/.zshenv" | head -1 || true)"
+fi
+if [[ -z "${FIXINDEX_INDEX:-}" && -f "$HOME/.zshenv" ]]; then
+  eval "$(grep '^export FIXINDEX_INDEX=' "$HOME/.zshenv" | head -1 || true)"
+fi
 FIXDIR="${FIXINDEX_DIR:-$PWD/fixes}"
 INDEX_FILE="${FIXINDEX_INDEX:-$PWD/FIX-INDEX.md}"
 RG="${RG:-rg}"
@@ -203,6 +211,11 @@ cmd_new() {
 
   local slug
   slug=$(slugify "$input")
+  # 剝掉開頭的數字編號前綴（如 "0417-foo" → "foo"），避免新檔變成 0418-0417-foo.md
+  slug=$(echo "$slug" | sed -E 's/^[0-9]+-//')
+  if [[ -z "$slug" ]]; then
+    die "slug collapsed to empty after stripping numeric prefix (got: $input)"
+  fi
 
   with_lock _cmd_new_write "$slug" "$etype"
 }
@@ -1022,7 +1035,27 @@ cmd_auto() {
       --fix)     fix="$2"; has_fix=1; shift 2 ;;
       --tags)    tags="$2"; has_tags=1; shift 2 ;;
       --commit|--shadow) shift ;;
-      *) die "unknown auto option: $1" ;;
+      -h|--help) cat <<'EOF'
+fixindex auto — capture ONE experience from stdin/flags (dedup → supersede → index)
+
+Usage:
+  echo "<自由文字，或 KEY: value 行（SYMPTOM/ROOT/FIX/VERIFY/KEYPOINT/TAGS）>" | fixindex auto [--title T]
+  fixindex auto --symptom "..." --fix "..." [--tags a,b] [--title T]
+
+Flags:
+  --title T   entry title (default: first SYMPTOM line or auto-derived)
+  --symptom S non-interactive symptom
+  --fix F     non-interactive fix/root
+  --tags T    comma-separated tags
+  --commit    run re-index + commit (default)
+  --shadow    dry-run, no commit
+
+Minimal valid stdin (KEY: value lines — at least one SYMPTOM, or a title):
+  SYMPTOM: terminal 跑 pytest 崩
+  FIX: 修 lifecycle_guard 第二崩點
+EOF
+        exit 0 ;;
+      *) die "unknown auto option: $1 (try 'fixindex auto --help'); note: stdin 請用 'KEY: value' 行格式（SYMPTOM/ROOT/FIX/VERIFY/KEYPOINT/TAGS 皆可），例如：echo 'SYMPTOM: foo' | fixindex auto" ;;
     esac
   done
   # 一鍵直落：--symptom/--fix/--tags 齊（title 可用首 symptom）即不讀 stdin
@@ -1038,11 +1071,11 @@ cmd_auto() {
     body=$(cat)
   fi
   if [[ -n "$body" ]]; then
-    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit <<EOF
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" ${rxargs[@]+"${rxargs[@]}"} --commit <<EOF
 $body
 EOF
   else
-    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" ${rxargs[@]+"${rxargs[@]}"} --commit
   fi
 }
 
