@@ -3,26 +3,104 @@
 import sys, os, json, re, math, collections, glob
 
 # ── tokenizer ──
+# 字典優先的 CJK 分詞（借鏡 claude-mem-lite）:
+#   1. 字典詞組整 token（資料庫 → 資料庫）
+#   2. 未命中部分 fallback 成疊字 bigram（修復 → 修/修复? 修復）
+# 避免逐字 token 導致中文跨字詞召回破碎。
+_CJK = r'[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]'
+# 精簡字典：fixindex 常見中文詞彙（可擴充）
+CJK_COMPOUNDS = [
+    '資料庫','數據庫','資料','數據','接口','函數','函式','變量','變數','元件','組件','模組','模塊',
+    '配置','框架','部署','測試','調試','除錯','編譯','緩存','快取','索引','權限','權限','認證','授權',
+    '加密','解密','併發','並發','異步','異步','執行緒','執行緒','進程','憑證','網關','監控','日誌','登錄',
+    '前端','後端','程式碼','代碼','檔案','文件','專案','項目','修復','修補','重構','優化','升級','降級',
+    '報錯','崩潰','超時','逾時','中斷','異常','隔離','發佈','發布','上線','回滾','回退','回退','遷移',
+    '記憶體','內存','磁碟','磁盤','存儲','儲存','查詢','搜尋','检索','召回','診斷','症狀','根因','驗證',
+    '運行','執行','啟動','重啟','停止','關閉','開啟','透過','啟用','停用','預設','默認','環境','依賴',
+    '錯誤','失敗','成功','警告','告警','登入','登出','帳號','密碼','金鑰','序號','版本','分支','合併',
+    '提交','推送','拉取','克隆','倉庫','儲存庫','本機','遠端','雲端','伺服器','客户端','客戶端','瀏覽器',
+    '手機','終端','命令','指令','腳本','脚本','插件','外掛','介面','綁定','異常','上半年','管道','輪子',
+    '方案','架構','設計','記錄','日誌','教程','說明','文件','備份','快照','淨','合規',
+]
+_CJK_SORTED = sorted(set(CJK_COMPOUNDS), key=len, reverse=True)
+
+# 双語向同義詞（查詢 token → 同義 token 集合），提升中英混記召回。
+# 借鏡 claude-mem-lite 的 SYNONYM_MAP 手法，精簡為 fixindex 常見詞。
+SYNONYMS = {
+    '搜尋': {'搜索','檢索','find','查詢'},
+    '搜索': {'搜尋','檢索','find','查詢'},
+    '查詢': {'查','搜尋','搜索','find'},
+    '記憶體': {'內存','ram','memory'},
+    '內存': {'記憶體','ram','memory'},
+    '修復': {'修補','修','fix','修復'},
+    '修': {'修復','fix','patch'},
+    '測試': {'test','測試','驗證'},
+    '驗證': {'測試','verify','test'},
+    '日誌': {'log','logfile','日記'},
+    'log': {'日誌','logfile'},
+    '錯誤': {'error','報錯','異常'},
+    '報錯': {'error','錯誤','異常'},
+    '異常': {'error','例外','報錯'},
+    '配置': {'config','設定','設置'},
+    'config': {'配置','設定','設置'},
+    '權限': {'permission','權限'},
+    'permission': {'權限'},
+    '異常終止': {'crash','崩潰'},
+    '崩潰': {'crash','異常終止'},
+    'crash': {'崩潰','異常終止'},
+    '診斷': {'diagnose','除錯'},
+    '除錯': {'debug','診斷'},
+    'debug': {'除錯','診斷'},
+}
+
+def _cjk_segment(run):
+    """字典優先分詞 + bigram fallback，回傳 token list。"""
+    toks = []
+    i = 0
+    while i < len(run):
+        matched = False
+        for w in _CJK_SORTED:
+            if run.startswith(w, i):
+                toks.append(w)
+                i += len(w)
+                matched = True
+                break
+        if not matched:
+            if i + 1 < len(run):
+                toks.append(run[i:i+2])   # 疊字 bigram
+            i += 1
+    return toks
+
 def tokenize(text):
     out = []
-    buf = ''
+    cjk = ''
+    en = ''
     for ch in text:
-        cp = ord(ch)
-        is_cjk = 0x4e00 <= cp <= 0x9fff or 0x3040 <= cp <= 0x30ff
-        if is_cjk:
-            if buf:
-                out.append(buf.lower())
-                buf = ''
-            out.append(ch)
+        if re.match(_CJK, ch):
+            if en:
+                out.append(en.lower()); en = ''
+            cjk += ch
         elif ch.isalnum() or ch in '._/@-:#':
-            buf += ch.lower()
+            if cjk:
+                out.append(cjk); cjk = ''
+            en += ch.lower()
         else:
-            if buf:
-                out.append(buf)
-                buf = ''
-    if buf:
-        out.append(buf.lower())
-    return [t for t in out if t]
+            if en:
+                out.append(en.lower()); en = ''
+            if cjk:
+                out.append(cjk); cjk = ''
+    if en:
+        out.append(en.lower())
+    if cjk:
+        out.append(cjk)
+    # 把 CJK 連續段切詞：字典優先 + bigram fallback
+    final = []
+    for t in out:
+        if re.fullmatch(_CJK + r'+', t):
+            final.extend(_cjk_segment(t))
+        else:
+            final.append(t)
+    return [t for t in final if t]
 
 # ── BM25 ──
 K1, B = 1.2, 0.75
@@ -56,9 +134,13 @@ class BM25Engine:
                 if occ:
                     f = min(occ, 3)
                     s += self.idf(t) * (f * (K1 + 1)) / (f + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
-            elif t in tf:
+            if t in tf:
                 f = tf[t]
                 s += self.idf(t) * (f * (K1 + 1)) / (f + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
+            # synonym expansion: any synonym of this query token also scores (×0.7)
+            for syn in SYNONYMS.get(t, ()):
+                if syn in tf:
+                    s += 0.7 * self.idf(syn) * (tf[syn] * (K1 + 1)) / (tf[syn] + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
         return s
 
     def search(self, query, limit=8):
