@@ -77,6 +77,7 @@ Commands:
   fixindex re-index             regenerate FIX-INDEX.md directory table
   fixindex supersede <old> <new>  mark old superseded by new
   fixindex fi <domain>            append fix entry from stdin (auto-match + commit)
+  fixindex auto [--title T]      capture ONE experience from stdin (dedup→supersede→index)
   fixindex help                 this message
 
 What belongs in an entry:
@@ -963,6 +964,26 @@ cmd_supersede() {
   cmd_re_index
 }
 
+cmd_auto() {
+  # Capture ONE experience from stdin (KEY: value lines: SYMPTOM/ROOT/FIX/VERIFY).
+  # One-shot pipeline: dedup → supersede → re-index (via fxauto.py --commit).
+  # 自動捕捉「重大開發/除錯結束記一筆」: agent 呼叫此指令, 不記個案、只記可索引經驗。
+  local self="${BASH_SOURCE[0]}"
+  [[ -L "$self" ]] && self="$(readlink "$self")"
+  local fxauto="${self%/*}/fxauto.py"
+  if [[ ! -f "$fxauto" ]]; then
+    die "fxauto.py not found next to fixindex: $fxauto"
+  fi
+  local title=""
+  [[ $# -gt 1 ]] && [[ "$1" == "--title" ]] && title="$2"
+  local body
+  body=$(cat)
+  [[ -n "$body" ]] || die "no SYMPTOM provided on stdin (format: SYMPTOM: ...)"
+  FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" --title "$title" --commit <<EOF
+$body
+EOF
+}
+
 main() {
   local sub="${1:-help}"
   shift || true
@@ -976,6 +997,7 @@ main() {
     re-index)    warn_if_default_dir; cmd_re_index ;;
     supersede)   warn_if_default_dir; cmd_supersede "$@" ;;
     fi)          warn_if_default_dir; cmd_fi "$@" ;;
+    auto)        warn_if_default_dir; cmd_auto "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $sub (try 'fixindex help')" ;;
   esac

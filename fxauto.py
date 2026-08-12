@@ -6,8 +6,8 @@ Usage: echo '...' | fxauto.py --shadow       (preview + dedup check)
 Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 
 去個案化 (借鏡 claude-mem-lite auto-dedup / supersede):
-  - 建檔前先比對既有條目標題重疊度, >=0.8 判定為重複經驗
-  - 重複時不建新檔, 改為呼叫 fixindex supersede 取代舊條目 (保留線索, 少走彎路)
+  - 建檔前先比對既有條目標題, 新經驗關鍵詞 (tgt ⊆ ts) 判定為重複經驗
+  - 重複時取代舊條目 (保留線索, 少走彎路)
 """
 
 import sys, os, json, re, glob as _glob
@@ -107,11 +107,32 @@ def build_entry(fid, title, symptoms, root, fix, verify, slug):
     return '\n'.join(parts) + '\n'
 
 
+def _run_index(cmd, *args, **extra):
+    """Run a fixindex subcommand bound to THIS FIXINDEX_DIR (so sandbox tests
+    don't leak into the real library). Uses the fixindex next to this file."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixindex')
+    if not os.path.exists(script):
+        script = 'fixindex'  # fall back to PATH
+    env = dict(os.environ, FIXINDEX_DIR=FIXINDEX_DIR)
+    return os.system(f'FIXINDEX_DIR={env["FIXINDEX_DIR"]} "{script}" {cmd}' + ('' if cmd.startswith('re-index') else ' >/dev/null 2>&1'))
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("usage: fxauto.py [--shadow|--commit]", file=sys.stderr)
+    args = sys.argv[1:]
+    mode = None
+    title_override = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '--title' and i + 1 < len(args):
+            title_override = args[i + 1]
+            i += 1
+        elif a in ('--shadow', '--commit'):
+            mode = a
+        i += 1
+    if not mode:
+        print("usage: fxauto.py [--shadow|--commit] [--title T]", file=sys.stderr)
         sys.exit(1)
-    mode = sys.argv[1]
 
     fields = {}
     for line in sys.stdin:
@@ -132,7 +153,7 @@ def main():
     if not symps:
         symps = [sympt.strip()]
 
-    title = symps[0][:80]
+    title = (title_override or symps[0])[:80]
     dup = find_duplicate(title)
 
     if mode == '--shadow':
