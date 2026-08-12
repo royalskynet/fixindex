@@ -322,6 +322,57 @@ count_sections() {
   echo "$n"
 }
 
+# Extract symptom lines from a **Symptom:** body block (stdin → stdout, one per line).
+# Handles both "**Symptom:** text on same line" and continuation lines after it,
+# stopping at the next **...:** field marker or end of body. Blank-line separated.
+_extract_symptoms() {
+  awk '
+    /^\*\*Symptom:/ {
+      rest=$0; sub(/^\*\*Symptom:\*\*[[:space:]]*/, "", rest)
+      if (rest != "") print rest
+      in_sym=1; buf=""; next
+    }
+    /^\*\*[A-Za-z ]+:/ {
+      if (in_sym && buf != "") print buf
+      in_sym=0; buf=""; next
+    }
+    in_sym {
+      s=$0; gsub(/^[[:space:]]*/, "", s); gsub(/[[:space:]]*$/, "", s)
+      if (s == "") { if (buf != "") { print buf; buf="" }; next }
+      buf = (buf == "" ? s : buf " " s)
+    }
+    END { if (in_sym && buf != "") print buf }
+  '
+}
+
+# Turn a line-per-symptom stream into a flow-style frontmatter list [a, b]
+to_flow_list() {
+  local out="" s
+  while IFS= read -r s; do
+    [[ -n "$s" ]] || continue
+    # strip double quotes & brackets so the flow list stays valid for fxmeta
+    s=${s//\"/}
+    s=${s//[[]/}
+    s=${s//]/}
+    out="${out:+$out, }$s"
+  done
+  echo "[$out]"
+}
+
+# Ensure body carries a `## §` heading. If none present, wrap it under §1.
+# $1 = target file (to count existing sections), body on stdin → rebuilt body on stdout.
+_ensure_section() {
+  local file="$1" body
+  body=$(cat)
+  if ! grep -q '^## §[0-9]' <<<"$body"; then
+    local n
+    n=$(count_sections "$file")
+    printf '## §%d 記錄\n\n%s\n' "$((n + 1))" "$body"
+  else
+    printf '%s\n' "$body"
+  fi
+}
+
 # fi — append fix entry from stdin to domain-matched fix file
 cmd_fi() {
   # Append a fix entry from stdin.
@@ -381,19 +432,42 @@ _cmd_fi_write() {
     fi
 
     local next_n
-    next_n=$(($(count_sections "$target") + 1))
+        next_n=$(($(count_sections "$target") + 1))
 
-    if [[ -n "$title" ]]; then
-      sed -i '' "s/^title:.*/title: \\\"$title\\\"/" "$target"
-    fi
+        if [[ -n "$title" ]]; then
+          sed -i '' "s/^title:.*/title: \\\\\\\"$title\\\\\\\"/" "$target"
+        fi
 
-    # Re-number section header
-    local section_body
-    section_body=$(printf '%s\\n' "$body" | sed -E 's/^## §[0-9]+/## §'"${next_n}"'/')
+        # Re-number section header
+        local section_body symptom_list
+        section_body=$(printf '%s\n' "$body" | sed -E 's/^## §[0-9]+/## §'"${next_n}"'/')
+        # If body has no § heading, wrap it under §N so find can index it.
+        if ! grep -q '^## §' <<<"$section_body"; then
+          local sec_head="${title:-記錄}"
+          section_body=$(printf '## §%d %s\n\n%s\n' "$next_n" "$sec_head" "$body")
+        fi
 
-    echo "" >> "$target"
-    printf '%s\\n' "$section_body" >> "$target"
-    echo "appended: ${target##*/} (§${next_n})"
+        echo "" >> "$target"
+        printf '%s\n' "$section_body" >> "$target"
+
+        # Merge new symptoms into the target's frontmatter so `find` picks them up.
+        symptom_list=$(printf '%s\n' "$body" | _extract_symptoms | to_flow_list)
+        if [[ "$symptom_list" != "[]" ]]; then
+          local existing_syms new_syms
+          existing_syms=$(awk '/^symptoms:/ {sub(/^symptoms:[[:space:]]*/,""); print; exit}' "$target")
+          # strip existing flow list brackets, append new items
+          existing_syms="${existing_syms#[}"
+          existing_syms="${existing_syms%]}"
+          new_syms="${symptom_list#[}"
+          new_syms="${new_syms%]}"
+          if [[ -n "$existing_syms" ]]; then
+            sed -i '' "s|^symptoms:.*|symptoms: [$existing_syms, $new_syms]|" "$target"
+          else
+            sed -i '' "s|^symptoms:.*|symptoms: $symptom_list|" "$target"
+          fi
+        fi
+
+        echo "appended: ${target##*/} (§${next_n})"
   else
     local slug_name
     slug_name=$(slugify "$domain")
@@ -423,8 +497,29 @@ related: []
 
 INNEREOF
 
-    # Append body with §1 re-numbering
-    printf '%s\\n' "$body" | sed -E 's/^## §[0-9]+/## §1/' >> "$newfile"
+    # Fill symptoms from body (so find 建完即命中), then append body with §1.
+    local symptom_list
+    symptom_list=$(printf '%s\n' "$body" | _extract_symptoms | to_flow_list)
+    if [[ "$symptom_list" != "[]" ]]; then
+      sed -i '' "s|^symptoms:.*|symptoms: $symptom_list|" "$newfile"
+    fi
+    # If title still TODO and body has a Symptom line, seed title from it.
+    if [[ -z "${title:-}" ]]; then
+      local first_sym
+      first_sym=$(printf '%s\n' "$body" | _extract_symptoms | head -1)
+      if [[ -n "$first_sym" ]]; then
+        sed -i '' "s|^title:.*|title: \\"$first_sym\\"|" "$newfile"
+      fi
+    fi
+
+    # Append body with §1 re-numbering; wrap in a section if body lacks one.
+    local section_body sec_head
+    section_body=$(printf '%s\n' "$body" | sed -E 's/^## §[0-9]+/## §1/')
+    if ! grep -q '^## §' <<<"$section_body"; then
+      sec_head="${title:-記錄}"
+      section_body=$(printf '## §1 %s\n\n%s\n' "$sec_head" "$body")
+    fi
+    printf '%s\n' "$section_body" >> "$newfile"
 
     echo "created: ${newfile##*/}"
   fi
