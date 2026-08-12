@@ -1,4 +1,7 @@
 *.bak
+*.bak-*
+*.original
+*.backup-*
 *.portablebak*
 *.tmp
 .DS_Store
