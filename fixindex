@@ -992,16 +992,19 @@ cmd_auto() {
   [[ $has_symptom -eq 1 ]] && rxargs+=(--symptom "$symptom")
   [[ $has_fix -eq 1 ]] && rxargs+=(--fix "$fix")
   [[ $has_tags -eq 1 ]] && rxargs+=(--tags "$tags")
-  if [[ $has_symptom -eq 1 && $has_fix -eq 1 ]]; then
-    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit
-    return $?
+  # D2: flags 齊時不再提前 return 跳過 stdin —— 一律透傳 stdin 給 fxauto.py
+  # （KEY 行補欄位、非 KEY 行進 §5 詳情）。tty 下 stdin 無料 → body 空 → flags-only。
+  local body=""
+  if [[ ! -t 0 ]]; then
+    body=$(cat)
   fi
-  local body
-  body=$(cat)
-  [[ -n "$body" ]] || die "no SYMPTOM provided on stdin (format: SYMPTOM: ...)"
-  FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit <<EOF
+  if [[ -n "$body" ]]; then
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit <<EOF
 $body
 EOF
+  else
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" "${rxargs[@]}" --commit
+  fi
 }
 
 main() {

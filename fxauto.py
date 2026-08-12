@@ -77,7 +77,7 @@ def find_duplicate(title):
     return best
 
 
-def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None):
+def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail=''):
     parts = []
     parts.append('---')
     parts.append(f'id: {fid}')
@@ -110,6 +110,11 @@ def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None):
     parts.append('## §4 Verify')
     parts.append('')
     parts.append(verify)
+    if detail:
+        parts.append('')
+        parts.append('## §5 詳情')
+        parts.append('')
+        parts.append(detail)
     return '\n'.join(parts) + '\n'
 
 
@@ -143,6 +148,62 @@ def _run_index(cmd, *args):
     return subprocess.run([script] + cmd.split(' ') + list(args), env=env)
 
 
+def _git_commit_push(paths):
+    """If FIXINDEX_DIR sits inside a git repo, add the given paths, commit with
+    a fixindex message, and push. Returns a dict reflecting reality
+    (宣告≠生效): committed=<short hash>|None, pushed=bool, git_error=<str>|None.
+    All git calls use list-arg subprocess (no shell, no '>' redirect chars).
+    Raises RuntimeError on commit/add failure (so caller can set exit code)."""
+    try:
+        r = subprocess.run(
+            ['git', '-C', FIXINDEX_DIR, 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True)
+    except Exception as e:
+        return {'committed': None, 'pushed': False, 'git_error': f'git unavailable: {e}'}
+    repo = (r.stdout or '').strip()
+    if r.returncode != 0 or not repo:
+        # 不在 git repo（sandbox）→ 不算錯誤
+        return {'committed': None, 'pushed': False, 'git_error': None}
+
+    # macOS /tmp → /private/tmp symlink：統一用 realpath 比對與算相對路徑
+    fixdir_real = os.path.realpath(FIXINDEX_DIR)
+    if not os.path.realpath(fixdir_real).startswith(os.path.realpath(repo) + os.sep):
+        return {'committed': None, 'pushed': False, 'git_error': None}
+
+    rel = []
+    for p in paths:
+        rp = os.path.realpath(p)
+        if os.path.exists(rp):
+            rel.append(os.path.relpath(rp, os.path.realpath(repo)))
+    add = subprocess.run(['git', '-C', repo, 'add', '--'] + rel,
+                         capture_output=True, text=True)
+    if add.returncode != 0:
+        return {'committed': None, 'pushed': False,
+                'git_error': f'git add: {(add.stderr or add.stdout).strip()[:200]}'}
+    # commit only if there are staged changes
+    diff = subprocess.run(['git', '-C', repo, 'diff', '--cached', '--quiet'],
+                          capture_output=True, text=True)
+    if diff.returncode == 0:
+        return {'committed': None, 'pushed': False, 'git_error': None}  # 無變動
+    title = os.path.basename(paths[0]) if paths else 'update'
+    cmsg = f"fixindex: {title}"
+    cm = subprocess.run(['git', '-C', repo, 'commit', '-m', cmsg],
+                        capture_output=True, text=True)
+    if cm.returncode != 0:
+        return {'committed': None, 'pushed': False,
+                'git_error': f'git commit: {(cm.stderr or cm.stdout).strip()[:200]}'}
+    short = 'unknown'
+    m = re.search(r'\[[^\]]+ ([0-9a-f]{7,})', cm.stdout or '')
+    if m:
+        short = m.group(1)
+    push = subprocess.run(['git', '-C', repo, 'push'],
+                          capture_output=True, text=True)
+    if push.returncode != 0:
+        return {'committed': short, 'pushed': False,
+                'git_error': f'git push: {(push.stderr or push.stdout).strip()[:200]}'}
+    return {'committed': short, 'pushed': True, 'git_error': None}
+
+
 def main():
     args = sys.argv[1:]
     mode = None
@@ -173,18 +234,24 @@ def main():
         sys.exit(1)
 
     fields = {}
-    non_interactive = bool(title_override and symptom_arg and fix_arg)
-    if non_interactive:
-        # 一鍵直落：四參數齊（tags 可省）→ 不讀 stdin
+    # flags 是最高優先 baseline
+    if symptom_arg:
         fields['symptom'] = symptom_arg
+    if fix_arg:
         fields['fix'] = fix_arg
-        fields['root'] = 'untraced'
-        fields['verify'] = 'verified'
-    else:
-        for line in sys.stdin:
-            m = re.match(r'^([A-Z]+):\s*(.+)', line.strip())
-            if m:
-                fields[m.group(1).lower()] = m.group(2).strip()
+    # D2: stdin 一律讀（即使 flags 齊也不再靜默跳過）：
+    #   - KEY 行（SYMPTOM/ROOT/FIX/VERIFY）補進 flags 沒給的欄位
+    #   - 非 KEY 行整段保留 → §5 詳情（實測數據/無效嘗試落點）
+    detail_lines = []
+    stdin_text = sys.stdin.read() if not sys.stdin.isatty() else ''
+    for raw in stdin_text.splitlines():
+        st = raw.strip()
+        m = re.match(r'^([A-Z]+):\s*(.+)', st)
+        if m and m.group(1).lower() in ('symptom', 'root', 'fix', 'verify'):
+            fields.setdefault(m.group(1).lower(), m.group(2).strip())
+        elif st:
+            detail_lines.append(raw)
+    detail = '\n'.join(detail_lines)
 
     sympt = fields.get('symptom', '')
     root = fields.get('root', 'untraced')
@@ -221,24 +288,38 @@ def main():
         # 去個案化：取代舊條目, 不創重複檔
         old_id = dup[0]
         new_id = next_id()
-        slug = slugify(f'{new_id}-{title}'[:60])
-        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags)
+        slug = slugify(title)
+        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail)
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
+        old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
+        import glob as _g
+        old_files = sorted(_g.glob(old_path))
         path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
         with open(path, 'w') as f:
             f.write(entry)
         _run_index(f'supersede {old_id} {new_id}')
-        print(json.dumps({'created': path, 'dedup': True, 'supersedes': old_id}))
+        payload = {'created': path, 'dedup': True, 'supersedes': old_id}
+        git_paths = [path, _resolve_index_file()] + old_files
+        payload.update(_git_commit_push(git_paths))
+        print(json.dumps(payload))
+        if payload.get('git_error'):
+            sys.exit(1)
+        return
     else:
         fid = next_id()
-        slug = slugify(f'{fid}-{title}'[:60])
-        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags)
+        slug = slugify(title)
+        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail)
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
         path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
         with open(path, 'w') as f:
             f.write(entry)
-        print(json.dumps({'created': path, 'dedup': False}))
         _run_index('re-index')
+        payload = {'created': path, 'dedup': False}
+        payload.update(_git_commit_push([path, _resolve_index_file()]))
+        print(json.dumps(payload))
+        if payload.get('git_error'):
+            sys.exit(1)
+        return
 
 
 if __name__ == '__main__':
