@@ -16,7 +16,7 @@ When the user's message begins with the literal word `Fixindex`, the agent must 
 | `Fixindex <symptom / error / domain>` | `fixindex find "<keyword>"`, then read the matching `fixes/NNNN-*.md` |
 | `Fixindex show NNNN` / mentions a specific ID | `fixindex show NNNN` |
 | `Fixindex grep <inner detail>` (not a symptom you'd expect in the index) | `fixindex grep "<keyword>"` (full-text) |
-| `Fixindex record <fix>` / `Fixindex log <fix>` / `Fixindex new entry` | Decide the domain (run `find` first), then append a `## §N` block + add the symptom string to the frontmatter `symptoms:` array |
+| `Fixindex record <fix>` / `Fixindex log <fix>` / `Fixindex new entry` | `printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …' | fixindex fi`（或指定 domain `fixindex fi <domain>`） |
 | Brand-new domain, no existing fix file fits | `fixindex new <slug>` |
 | `Fixindex supersede <old>` / `<old> replaced by <new>` | `fixindex supersede <old> <new>` |
 | **`fi` — bare, nothing else in the message** | **Record what the conversation just produced.** See A.1 |
@@ -30,21 +30,14 @@ You should already be recording an entry **as you wrap up any substantial task**
 
 A bare `fi` (nothing else in the message) means: **write it down now.** Not `fixindex list`, not "what would you like me to record?" — this is the keyword a user reaches for at the moment they stop working, and one clarifying question destroys its entire value.
 
-Steps:
-
-1. `fixindex list` — judge which domain it belongs to
-2. `fixindex find` — check for a closer existing file
-3. Existing file → append `## §N` + extend frontmatter `symptoms:`; otherwise `fixindex new <slug>`
-4. `fixindex re-index` — only when you created a file
+收到 `fi` → 立刻組 3–6 行摘要 pipe 給 `fixindex fi` 記下，不追問、不 `list`、不 `find`。`fixindex fi` 會自動 dedup、domain 匹配 append 新 `## §N`（無匹配則建新檔）、re-index、commit。
 
 What to write: the **root-cause formula, supporting data, the paths already ruled out, and any portable rule**. Not a changelog of edits. **Record it even when the fix isn't implemented** — write "not fixed", note the next step, and stop. The diagnosis is the asset; it's what stops the next person re-deriving it.
 
-For scripted or piped capture, the `fi` subcommand reads the body from stdin and matches the domain itself:
-
 ```bash
-printf '**Symptom:** ...\n**Root cause:** ...\n**Fix:** ...\n**Verify:** ...\n' \
-  | fixindex fi redis --title "Redis cluster failover" --tags redis,cluster
+printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <rerunnable command>' | fixindex fi
 ```
+自由文字也行（`echo '一行症狀' | fixindex fi`）；指定 domain 的舊介面 `fixindex fi <domain>` 仍可用。
 
 ---
 
@@ -135,10 +128,11 @@ include: user names a system + a symptom, user uses a failure verb
 fixes/NNNN-*.md before writing or editing code. If find returns no match,
 fall back to general exploration.
 
-After solving a new bug, append a `## §N {title}` block to the matching fix
-file using the Symptom / Root cause / Fix / Verify shape, and add the new
-symptom string to the frontmatter `symptoms:` array. For a brand-new domain,
-run `fixindex new <slug>` then fill the scaffold.
+After solving a new bug, record it with a single pipe:
+`printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <rerunnable command>' | fixindex fi`
+(`fixindex fi` auto-dedups, appends a new `## §N` to the matching domain file — or creates a
+new entry if none fits — re-indexes, and commits; free text like `echo '...' | fixindex fi`
+also works. Don't hand-append `## §N` or edit `symptoms:`.)
 
 Write an entry only when you have fixed a defect — not when a phase, task,
 or session completes. Symptom before narrative: if you cannot write a Symptom

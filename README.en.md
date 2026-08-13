@@ -162,21 +162,29 @@ fi
 
 A bare `fi` (nothing else in the message) means **record what this conversation just produced, now**. Not "list the entries", not "what would you like me to write" — one clarifying question and the point is lost. The value of `fi` is zero-friction capture at the moment you stop working.
 
-On receiving `fi` the agent should:
+On receiving `fi` the agent should immediately pipe a short summary to
+`fixindex fi` — no `list`, no `find`, no clarifying question:
 
-1. `fixindex list` to judge which domain it belongs to
-2. `fixindex find` to check for a closer existing file
-3. Existing file → append `## §N` and extend the frontmatter `symptoms:`; otherwise `fixindex new <slug>`
-4. `fixindex re-index` (only needed when a new file was created)
+```bash
+printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <rerunnable command>' | fixindex fi
+```
+
+`fixindex fi` (no args) auto-dedups, appends a new `## §N` to the best-matching
+domain file (or creates a new entry if none fits), re-indexes, and commits.
+Free text also works (`echo 'one-line symptom' | fixindex fi`). Don't
+hand-append `## §N` or edit `symptoms:` yourself.
 
 What goes in is the **root-cause formula, the supporting data, the paths already ruled out, and any portable rule** — not a changelog of what was edited. **Record it even when the fix isn't implemented yet**: say "not fixed", note the next step, and move on. The diagnosis is the asset — it's what saves the next person from re-deriving it.
 
-You can also pipe an entry straight in (the `fi` subcommand reads the body from stdin and matches the domain for you):
+You can also pipe an entry straight in (the `fi` subcommand reads the body from
+stdin and matches the domain for you) — this IS the canonical path now:
 
 ```bash
-printf '**Symptom:** ...\n**Root cause:** ...\n**Fix:** ...\n**Verify:** ...\n' \
-  | fixindex fi redis --title "Redis cluster failover" --tags redis,cluster
+printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <rerunnable command>' | fixindex fi
 ```
+
+The legacy explicit-domain form `fixindex fi <domain> [--title ... --tags ...]`
+still works for pinning an entry to a specific domain.
 
 ## Using with LLM coding agents
 

@@ -84,8 +84,10 @@ Commands:
   fixindex doctor [--fix]       diagnose and repair corrupted frontmatter
   fixindex re-index             regenerate FIX-INDEX.md directory table
   fixindex supersede <old> <new>  mark old superseded by new
-  fixindex fi <domain>            append fix entry from stdin (auto-match + commit)
-  fixindex auto [--title T]      capture ONE experience from stdin (dedup→supersede→index)
+  fixindex fi                 一行 pipe 記 defect/經驗（自動 dedup→append→建新→commit）
+                               `printf 'SYMPTOM: …\\nFIX: …' | fixindex fi`（自由文字也行）
+  fixindex fi <domain>        舊介面：指定 domain 直接 append（--title/--push/--new）
+  fixindex auto               等同 `fixindex fi`（無參數，保留別名）
   fixindex help                 this message
 
 What belongs in an entry:
@@ -343,24 +345,36 @@ cmd_re_index() {
   fi
 }
 
-# Find best matching fix file for a domain keyword (case-insensitive slug/title match)
+# Find best matching fix file for a domain keyword (GRADED match, refuse-to-guess).
+# Grades: ① slug exactly equals kw; ② slug starts with "<kw>-"; ③ substring only (weak).
+# Only ①② are conclusive. ③ (or a tie among ③) is ambiguous → return empty so the
+# caller creates a fresh entry rather than polluting an existing file. (B1: was
+# "largest ID wins on substring" → wrongly picked 0394 over 0001 for 'hermes'.)
 find_domain_file() {
-  local kw="$1" best="" best_id=0
+  local kw="$1" best_g1="" best_g2=""
+  # keyword → slug form for exact/prefix comparison (case-insensitive)
+  local kslug
+  kslug=$(printf '%s' "$kw" | tr '[:upper:]' '[:lower:]')
   for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
     [[ -e "$f" ]] || continue
-    local base id slug title
+    local base id slug slug_lower
     base=$(basename "$f" .md)
     id="${base%%-*}"
     slug="${base#*-}"
-    title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); print; exit}' "$f")
+    slug_lower=$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')
     # fi（defect 路徑）不 append 進 insight 檔
     grep -q '^type:[[:space:]]*insight' "$f" && continue
-    if echo "$slug $title" | grep -qiF "$kw"; then
-      local n=$((10#$id))
-      (( n > best_id )) && { best="$f"; best_id=$n; }
+    if [[ "$slug_lower" == "$kslug" ]]; then
+      best_g1="$f"
+    elif [[ "$slug_lower" == "$kslug-"* ]]; then
+      best_g2="$f"
     fi
+    # ③ substring 不在此計分——避免模糊誤配
   done
-  echo "$best"
+  # ①直接用；否則 ②直接用；只剩 ③ → 拒猜
+  if [[ -n "$best_g1" ]]; then echo "$best_g1"; return; fi
+  if [[ -n "$best_g2" ]]; then echo "$best_g2"; return; fi
+  echo ""
 }
 
 # Count existing sections (§N) in a fix file
@@ -368,6 +382,14 @@ count_sections() {
   local n
   n=$(grep -c '^## §[0-9]' "$1" 2>/dev/null) || n=0
   echo "$n"
+}
+
+# Maximum numeric ## §N in file (0 if none). Use for the next append id —
+# unlike count_sections, correct even when sections aren't contiguous (§10-13).
+max_section() {
+  local m
+  m=$(grep -o '^## §[0-9][0-9]*' "$1" 2>/dev/null | grep -o '[0-9][0-9]*$' | sort -n | tail -1)
+  echo "${m:-0}"
 }
 
 # Extract symptom lines from a **Symptom:** body block (stdin → stdout, one per line).
@@ -421,26 +443,27 @@ _ensure_section() {
   fi
 }
 
-# fi — append fix entry from stdin to domain-matched fix file
+# fi — record one defect/experience from stdin. 零參數＝一行 pipe（新主入口）。
+#   eclipse `fixindex fi`（無參數）＝ fxauto 全自動：自由文字容錯、dedup/supersede、
+#     無重複時 domain append §N（find_domain_file 分級匹配）或建新檔 → re-index → commit。
+#   保留舊介面 `fixindex fi <domain> [--title/--tags/--push/--new]`（指定 domain 直接 append）。
 cmd_fi() {
-  # Append a fix entry from stdin.
-  # New UX:
-  #   * Auto‑match protection – prints the chosen target entry (id/title) and a
-  #     simple similarity metric. If similarity is low, suggest using `--new`.
-  #   * `--new` flag forces creation of a fresh entry even when a matching
-  #     domain file exists.
-  [[ $# -ge 1 ]] || die "usage: fixindex fi <domain-keyword> [--title TITLE] [--tags t1,t2] [--push] [--new]"$'\n  Reads body from stdin'
-
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    _cmd_fi_help
+    return 0
+  fi
+  if [[ $# -eq 0 ]]; then
+    _cmd_fi_auto
+    return 0
+  fi
+  # Legacy: fi <domain>
   local domain="$1"
-
   # Disallow flags as the domain argument.
   if [[ "$domain" == -* ]]; then
     die "domain must not start with '-' (got: $domain)"
   fi
-
   shift
   local title="" tags="" do_push=false force_new=false
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --title) title="$2"; shift 2 ;;
@@ -450,12 +473,31 @@ cmd_fi() {
       *) shift ;;
     esac
   done
-
   local body
   body=$(cat)
   [[ -n "$body" ]] || die "no body provided on stdin"
-
   with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$force_new" "$body"
+}
+
+# 零參數 fi / auto 共用：全自動管線（fxauto.py --commit）
+_cmd_fi_auto() {
+  local self="${BASH_SOURCE[0]}"
+  [[ -L "$self" ]] && self="$(readlink "$self")"
+  local fxauto="${self%/*}/fxauto.py"
+  [[ -f "$fxauto" ]] || die "fxauto.py not found next to fixindex: $fxauto"
+  FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" --commit
+}
+
+# fixindex fi --help — ≤8 行 cheat sheet（首行即 canonical one-liner）
+_cmd_fi_help() {
+  cat <<'EOF'
+fixindex fi — 一行 pipe 記 defect/經驗（自動 dedup→domain append→建新→re-index→commit）
+  自由文字或 KEY 行皆可，例如：
+  printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …' | fixindex fi
+  或 echo '一句話描述症狀' | fixindex fi
+舊介面（指定 domain 直接 append）: fixindex fi <domain> [--title T] [--push] [--new]
+誤配/誤寫還原: git checkout -- fixes/NNNN-*.md  （append 前有 .fi-undo- 快照）
+EOF
 }
 
 _cmd_fi_write() {
@@ -480,11 +522,14 @@ _cmd_fi_write() {
     fi
 
     local next_n
-        next_n=$(($(count_sections "$target") + 1))
+        next_n=$(($(max_section "$target") + 1))
 
-        if [[ -n "$title" ]]; then
-          sed -i '' "s/^title:.*/title: \\\\\\\"$title\\\\\\\"/" "$target"
-        fi
+        # B3: undo 快照（寫入前保留原檔，供誤配還原）
+        local undo_backup
+        undo_backup="$(dirname "$target")/.fi-undo-$(basename "$target").$$"
+        cp "$target" "$undo_backup" 2>/dev/null || true
+
+        # B2: append 永不改寫目標檔 title —— --title 只當 §N 標題用
 
         # Re-number section header
         local section_body symptom_list
@@ -516,6 +561,7 @@ _cmd_fi_write() {
         fi
 
         echo "appended: ${target##*/} (§${next_n})"
+        echo "  誤以為誤配/誤寫 → 還原：git checkout -- ${target##*/}  (undo 快照 ${undo_backup##*/})"
   else
     local slug_name
     slug_name=$(slugify "$domain")
@@ -1099,3 +1145,4 @@ main() {
 }
 
 main "$@"
+

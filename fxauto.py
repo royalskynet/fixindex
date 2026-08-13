@@ -10,7 +10,7 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
   - 重複時取代舊條目 (保留線索, 少走彎路)
 """
 
-import sys, os, json, re, subprocess, glob as _glob
+import sys, os, json, re, subprocess, glob as _glob, tempfile
 import fxmeta
 
 FIXINDEX_DIR = os.environ.get('FIXINDEX_DIR',
@@ -40,8 +40,118 @@ def _title_tokens(text):
         import fxsearch
         return set(fxsearch.tokenize(text))
     except Exception:
-        norm = re.sub(r'[\s，。,.!?、:：;；()（）\[\]{}"\'`~\-—]+', '', text.lower())
+        norm = re.sub(r'[\s，。,.!?、:：;；()（）\[\]\{\}"\'`~\-—]+', '', text.lower())
         return {norm}
+
+
+def _word_tokens(text):
+    """Split into lowercase word tokens for domain matching (ignore short reads)."""
+    return [t.lower() for t in re.split(r'[\s，。,.!?、:：;；()（）\[\]\{\}"\'`~\-—/]+', text)
+            if len(t.strip()) >= 3]
+
+
+def find_domain_file_auto(title, symps, etype='defect'):
+    """Graded domain match for the no-arg `fi` pipeline (B1: refuse-to-guess).
+
+    Candidate keywords = tokens drawn from the title + first symptom. A file
+    matches ① when a candidate token == its slug exactly, or ② when one is a
+    dash-prefix of the other. Only exact/prefix matches are used — substring
+    matches are treated as ambiguous and a fresh file is created instead of
+    polluting an existing one.
+    """
+    cand = list(dict.fromkeys(_word_tokens(title) + (_word_tokens(symps[0]) if symps else [])))
+    if not cand:
+        return None
+    files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
+    g1, g2 = {}, {}
+    for fp in files:
+        base = os.path.basename(fp)  # NNNN-slug.md
+        if '-' not in base[:-3]:
+            continue
+        _id, slug = base[:-3].split('-', 1)
+        try:
+            with open(fp) as f:
+                txt = f.read()
+        except Exception:
+            continue
+        fm, _ = fxmeta.parse_frontmatter_full(txt)
+        if str(fm.get('type') or 'defect') != etype:
+            continue
+        s = slug.lower()
+        for t in set(cand):
+            if t == s:
+                g1[fp] = g1.get(fp, 0) + 1
+            elif s.startswith(t + '-') or t.startswith(s + '-'):
+                g2[fp] = g2.get(fp, 0) + 1
+    # ①直接用：取命中 token 最多者（多檔平手時取最多，仍屬 ① 明確匹配）
+    if g1:
+        return max(g1, key=lambda k: g1[k])
+    # ②直接用：僅當單一檔
+    if len(g2) == 1:
+        return next(iter(g2))
+    return None
+
+
+def _merge_symptoms(path, new_symps):
+    """Append missing symptoms into the file's frontmatter symptoms: list."""
+    with open(path) as f:
+        lines = f.readlines()
+    idx, existing = None, []
+    for i, ln in enumerate(lines):
+        m = re.match(r'^symptoms:[ \t]*(.*)$', ln)
+        if m:
+            idx = i
+            val = m.group(1).strip()
+            if val.startswith('[') and val.endswith(']'):
+                inner = val[1:-1]
+                existing = [x.strip().strip('"\'') for x in inner.split(',') if x.strip()]
+            break
+    if idx is None:
+        return
+    added = 0
+    for s in new_symps:
+        s = s.strip()
+        if s and s not in existing:
+            existing.append(s)
+            added += 1
+    if added == 0:
+        return
+    lines[idx] = 'symptoms: [' + ', '.join(existing) + ']\n'
+    with open(path, 'w') as f:
+        f.writelines(lines)
+
+
+def _append_to_file(path, title, symps, root, fix, verify, detail=''):
+    """Append a renumbered §N section to an existing file. NEVER rewrites its
+    title (B2); snapshots the original to /tmp first (B3)."""
+    import time, shutil
+    with open(path) as f:
+        txt = f.read()
+    snap = os.path.join(tempfile.gettempdir(),
+                        f'fi-undo-{os.path.basename(path)}.{os.getpid()}')
+    try:
+        shutil.copy(path, snap)
+    except Exception:
+        snap = None
+    secs = [int(m) for m in re.findall(r'^## §(\d+)', txt, re.M)]
+    n = (max(secs) + 1) if secs else 1
+    lines = [f'## §{n} {title or "記錄"}', '']
+    lines.append('**Symptom:** ' + '; '.join(symps))
+    lines.append('')
+    lines.append('**Root cause:** ' + root)
+    lines.append('')
+    lines.append('**Fix:** ' + fix)
+    lines.append('')
+    lines.append('**Verify:** ' + verify)
+    lines.append('')
+    if detail:
+        lines.append(detail)
+        lines.append('')
+    with open(path, 'a') as f:
+        f.write('\n' + '\n'.join(lines) + '\n')
+    _merge_symptoms(path, symps)
+    return snap, n
+
 
 
 def find_duplicate(title, etype='defect'):
@@ -207,8 +317,32 @@ def _git_commit_push(paths):
     return {'committed': short, 'pushed': True, 'git_error': None}
 
 
+def _pull_first_if_repo():
+    """寫入前 pull-first：若 FIXINDEX_DIR 在 git repo，先收 remote 變更，避免在
+    落後上游直接 commit+push（仿 0394 force-push 覆寫事故）。sandbox（非 git）
+    為 no-op。失敗→回傳錯誤字串（呼叫端決定中止）。"""
+    try:
+        r = subprocess.run(
+            ['git', '-C', FIXINDEX_DIR, 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True)
+    except Exception:
+        return None
+    repo = (r.stdout or '').strip()
+    if r.returncode != 0 or not repo:
+        return None
+    pf = subprocess.run(['git', '-C', repo, 'pull', '--rebase', '--autostash'],
+                        capture_output=True, text=True)
+    if pf.returncode != 0:
+        return f'pull-first: {(pf.stderr or pf.stdout).strip()[:200]}'
+    return None
+
+
 def main():
     args = sys.argv[1:]
+    plerr = _pull_first_if_repo()
+    if plerr:
+        print(json.dumps({'git_error': plerr, 'committed': None, 'pushed': False}))
+        sys.exit(1)
     mode = None
     title_override = None
     symptom_arg = None
@@ -257,6 +391,17 @@ def main():
     detail = '\n'.join(detail_lines)
 
     sympt = fields.get('symptom', '')
+    if not sympt:
+        # 自由文字容錯：無 SYMPTOM KEY 時，取首行非空、非 KEY 行當 symptom
+        for raw in stdin_text.splitlines():
+            st = raw.strip()
+            if not st:
+                continue
+            if re.match(r'^[A-Z]+\s*:\s*\S', st) and st.split(':', 1)[0].lower() in ('symptom', 'root', 'fix', 'verify'):
+                continue
+            fields.setdefault('symptom', st)
+            break
+        sympt = fields.get('symptom', '')
     root = fields.get('root', 'untraced')
     fix = fields.get('fix', 'applied')
     verify = fields.get('verify', 'verified')
@@ -317,6 +462,18 @@ def main():
             sys.exit(1)
         return
     else:
+        # 無重複 → 先試 domain append（分級匹配，拒猜；不中才建新檔）
+        match = find_domain_file_auto(title, symps)
+        if match:
+            snap, secn = _append_to_file(match, title, symps, root, fix, verify, detail)
+            _run_index('re-index')
+            payload = {'appended': os.path.basename(match), 'section': secn,
+                       'dedup': False, 'undo': snap}
+            payload.update(_git_commit_push([match, _resolve_index_file()]))
+            print(json.dumps(payload))
+            if payload.get('git_error'):
+                sys.exit(1)
+            return
         fid = next_id()
         slug = slugify(title)
         entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail)

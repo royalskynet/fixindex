@@ -126,22 +126,21 @@ related: []
 
 **修好一個 defect 才寫**，不是 phase 完成、任務交付或收工。只診斷沒修也照寫，但明寫「未修」並留下一步 —— 診斷本身就是資產。
 
-### 方式 1：直接對應 domain（agent 常用）
-
-找出最貼近的既有檔 → 追加 `## §N` → 把新症狀加進 frontmatter `symptoms:`。沒有貼近的檔就 `fixindex new <slug>`。
-
-### 方式 2：`fi` 子命令（從 stdin / 自動配對）
+### 一行 pipe（唯一主路徑）
 
 ```bash
-printf '**Symptom:** ...\n**Root cause:** ...\n**Fix:** ...\n**Verify:** ...\n' \
-  | fixindex fi redis --title "Redis cluster failover" --tags redis,cluster
+printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <可重跑的驗證命令>' | fixindex fi
 ```
 
-`fi` 依業務關鍵字配對最貼近的 domain：
-- 有匹配 → append `## §N`
-- 無匹配 → 建新檔
-- `--new` 強制開新檔
-- `--push` 自動 git add/commit/push
+自由文字也行（`echo '一行症狀' | fixindex fi`）。`fixindex fi`（零參數）自動：dedup/supersede → domain 匹配 append 新 `## §N`（無匹配則建新檔）→ re-index → commit。不要再手動 append `## §N` 或編輯 frontmatter `symptoms:`。
+
+### 指定 domain（向下相容）
+
+```bash
+printf 'SYMPTOM: ...\nFIX: ...' | fixindex fi <domain> [--title "..." --tags a,b] [--push]
+```
+
+`fi <domain>` 直接 append 到指定 domain；`--new` 強制開新檔；`--push` 自動 git add/commit/push。
 
 ### 語意自動配對（`fi` 的 domain 判定）
 
