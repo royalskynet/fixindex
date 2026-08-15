@@ -544,20 +544,71 @@ _cmd_fi_write() {
         printf '%s\n' "$section_body" >> "$target"
 
         # Merge new symptoms into the target's frontmatter so `find` picks them up.
-        symptom_list=$(printf '%s\n' "$body" | _extract_symptoms | to_flow_list)
-        if [[ "$symptom_list" != "[]" ]]; then
-          local existing_syms new_syms
-          existing_syms=$(awk '/^symptoms:/ {sub(/^symptoms:[[:space:]]*/,""); print; exit}' "$target")
-          # strip existing flow list brackets, append new items
-          existing_syms="${existing_syms#[}"
-          existing_syms="${existing_syms%]}"
-          new_syms="${symptom_list#[}"
-          new_syms="${new_syms%]}"
-          if [[ -n "$existing_syms" ]]; then
-            sed -i '' "s|^symptoms:.*|symptoms: [$existing_syms, $new_syms]|" "$target"
-          else
-            sed -i '' "s|^symptoms:.*|symptoms: $symptom_list|" "$target"
-          fi
+        symptom_json=$(printf '%s\n' "$body" | _extract_symptoms | python3 -c "import json,sys; items=[l.strip() for l in sys.stdin if l.strip()]; print(json.dumps(items, ensure_ascii=False))")
+        if [[ "$symptom_json" != "[]" ]]; then
+          TARGET="$target" SYM_JSON="$symptom_json" python3 <<'PYEOF'
+import json, os, sys, re
+from pathlib import Path
+
+target = Path(os.environ['TARGET'])
+new_syms = json.loads(os.environ['SYM_JSON'])
+if not new_syms:
+    sys.exit(0)
+
+lines = target.read_text(encoding='utf-8').splitlines(keepends=True)
+dash = [i for i, l in enumerate(lines) if l.strip() == '---']
+if len(dash) < 2:
+    sys.exit(0)
+
+fm = lines[dash[0]:dash[1] + 1]
+syms_start = syms_end = None
+for i, l in enumerate(fm):
+    s = l.strip()
+    if s.startswith('symptoms:'):
+        syms_start = i
+    elif syms_start is not None and s and not s.startswith('- '):
+        syms_end = i
+        break
+if syms_end is None:
+    syms_end = len(fm)
+
+existing = []
+for i in range(syms_start or 0, syms_end or len(fm)):
+    l = fm[i]; s = l.strip()
+    if s.startswith('symptoms:'):
+        val = s[len('symptoms:'):].strip()
+        if val.startswith('[') and val.endswith(']'):
+            inner = val[1:-1].strip()
+            if inner:
+                try:
+                    existing.extend(str(x) for x in json.loads('[' + inner + ']'))
+                except json.JSONDecodeError:
+                    for it in inner.split(', '):
+                        existing.append(it.strip())
+    elif s.startswith('- '):
+        item = s[2:].strip()
+        if item.startswith('"') and item.endswith('"'):
+            try:
+                item = json.loads(item)
+            except json.JSONDecodeError:
+                pass
+        existing.append(str(item))
+
+all_items = []
+seen = set()
+for it in existing + new_syms:
+    it_str = str(it)
+    if it_str not in seen:
+        seen.add(it_str)
+        all_items.append(it_str)
+
+block = 'symptoms:\n'
+for it in all_items:
+    block += f'  - {json.dumps(it, ensure_ascii=False)}\n'
+new_fm = (fm[:syms_start] if syms_start is not None else []) + [block] + (fm[syms_end:] if syms_end is not None else fm)
+result = lines[:dash[0]] + new_fm + lines[dash[1] + 1:]
+target.write_text(''.join(result), encoding='utf-8')
+PYEOF
         fi
 
         echo "appended: ${target##*/} (§${next_n})"
@@ -593,16 +644,32 @@ INNEREOF
 
     # Fill symptoms from body (so find 建完即命中), then append body with §1.
     local symptom_list
-    symptom_list=$(printf '%s\n' "$body" | _extract_symptoms | to_flow_list)
-    if [[ "$symptom_list" != "[]" ]]; then
-      sed -i '' "s|^symptoms:.*|symptoms: $symptom_list|" "$newfile"
+    symptom_json=$(printf '%s\n' "$body" | _extract_symptoms | python3 -c "import json,sys; items=[l.strip() for l in sys.stdin if l.strip()]; print(json.dumps(items, ensure_ascii=False))")
+    if [[ "$symptom_json" != "[]" ]]; then
+      TARGET="$newfile" SYM_JSON="$symptom_json" python3 <<'PYEOF'
+import json, os, re
+from pathlib import Path
+
+target = Path(os.environ['TARGET'])
+syms = json.loads(os.environ['SYM_JSON'])
+if not syms:
+    raise SystemExit(0)
+text = target.read_text(encoding='utf-8')
+block_lines = ['symptoms:']
+for it in syms:
+    block_lines.append(f'  - {json.dumps(it, ensure_ascii=False)}')
+block = '\n'.join(block_lines)
+text = re.sub(r'(?m)^symptoms:.*(?:\n  - .*)*', lambda m: block, text)
+target.write_text(text, encoding='utf-8')
+PYEOF
     fi
     # If title still TODO and body has a Symptom line, seed title from it.
     if [[ -z "${title:-}" ]]; then
       local first_sym
       first_sym=$(printf '%s\n' "$body" | _extract_symptoms | head -1)
       if [[ -n "$first_sym" ]]; then
-        sed -i '' "s|^title:.*|title: \\"$first_sym\\"|" "$newfile"
+        TITLE_SAFE=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1], ensure_ascii=False))" "$first_sym")
+        sed -i '' "s|^title:.*|title: $TITLE_SAFE|" "$newfile"
       fi
     fi
 
