@@ -108,6 +108,26 @@ The test is mechanical: **if you cannot write a `Symptom` that someone would pla
 
 ---
 
+## Mode C — Hook-enforced three-point loop (Claude Code reference implementation)
+
+Modes A and B rely on the model remembering to fire. Under load it forgets. If your agent supports lifecycle hooks (Claude Code does), enforce the loop at exactly **three points** — not "on every action" (too noisy) and not "only before planning" (blind to what you hit mid-run):
+
+| Point | Hook event | What fires |
+|---|---|---|
+| 1. Plan start — static sweep | `PreToolUse` on `ExitPlanMode` | If the session has run no `fixindex find` yet, inject a one-shot reminder: domain-level find on the plan's topic + toolchain, plus pre-query the foreseeable failure symptoms (external services, permissions, timeouts, stale state). Runs once, never nags. |
+| 2. Mid-run — on-failure lookup | `PreToolUse` on `Bash`, mounted on the consecutive-failure counter | When a command fingerprint has already failed ≥1 time and the agent is about to retry, the hook itself runs `fixindex find "<last failure symptom>"` and injects the hits into context before the retry. At ≥2 failures the stop-loss notice takes over. |
+| 3. Wrap-up — fi gate | `Stop` | If the transcript looks like a debug session (≥10 tool calls + error markers) and no `fixindex fi/new/auto` was run, return `{"decision":"block"}` to force a catch-up entry (or a one-line "nothing to record"). Guard with `stop_hook_active` to prevent loops; stay silent for small tasks below the call threshold. |
+
+Properties: no failure → no trigger, so frequency is naturally bounded; mines the plan-time sweep can't see are caught the moment you step on them (point 2 covers the mid-run blind spot).
+
+Reference implementation: [`hooks/plan-path-notice.js` and `hooks/fi-reminder.sh` in Ether-prompt](https://github.com/royalskynet/Ether-prompt/tree/main/hooks).
+
+Two hard-won implementation notes: (a) `PostToolUse` does **not** fire when a Bash command exits non-zero and its payload has no exit code — read `is_error` from the session transcript instead; (b) time your `fixindex find` before embedding it in a hook (measured ~2.8 s) and give the subprocess timeout 1.5× headroom, or every lookup silently returns empty.
+
+三點式（中文摘要）：① plan 起點域級掃雷（一次性，含預判高機率踩雷點）② 執行期踩雷當下、重試前以上次失敗症狀自動查 fixindex ③ 完工 Stop hook 擋收尾強制補 `fi`（小任務低於呼叫數門檻則靜默）。不失敗不觸發，頻率天然有界。
+
+---
+
 ## Why two modes
 
 - **Mode A** (the keyword) is for moments the user wants explicit control — "go check the runbook for this thing I'm about to describe".

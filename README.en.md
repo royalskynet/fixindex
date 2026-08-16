@@ -192,6 +192,8 @@ still works for pinning an entry to a specific domain.
 
 Full natural-language dispatch table (with examples and rationale) in [`docs/agent-integration.md`](./docs/agent-integration.md).
 
+If your agent supports lifecycle hooks, see **Mode C — the three-point loop** in the same doc: a plan-start domain sweep, an on-failure lookup right before any retry, and a stop-time gate that blocks wrap-up until the session's fix is recorded. Prompt-based triggers get forgotten under load; hooks don't. Reference implementation: [Ether-prompt hooks](https://github.com/royalskynet/Ether-prompt/tree/main/hooks).
+
 Turn "agent re-explores the whole repo" into "agent checks the runbook first" — the same fix doesn't get rediscovered every month.
 
 ## Why featherweight

@@ -207,6 +207,16 @@ cat agent-snippets/generic.md >> <你的 agent 規則檔>      # 通用
 
 **建議的自動記錄時機**（節能、按需，不每句都記）：較大的開發、除錯或重大洞察結束時；修好 defect 時；發現可移植的 rule 時。小改動、無技術含量、純敘事不記。
 
+### 三點式 loop（hook 強制版，Claude Code 參考實作）
+
+提示詞觸發靠模型自覺，忙起來會漏。支援 lifecycle hooks 的 agent 可把查/記強制在**三個時點**——不是「每動都查」（太吵）也不是「只 plan 前查」（執行期盲）：
+
+1. **plan 起點**：session 還沒跑過 `find` → 注入一次性提醒，對 plan 主題＋工具鏈做域級掃雷，並預判高機率踩雷點（外部服務/權限/timeout/stale state）順帶先查
+2. **執行期踩雷當下**：同指令指紋已失敗 ≥1 次、正要重試 → hook 直接以上次失敗症狀跑 `fixindex find`，命中條目注入 context 再讓 agent 決定繞路；≥2 次觸發停損
+3. **完工收尾**：疑似除錯 session（≥10 次工具呼叫＋error 跡象）未記 → Stop hook 擋下收尾強制補 `fi`；小任務低於門檻靜默
+
+不失敗不觸發，頻率天然有界；plan 前查不到的雷，踩到當下查得到。實作細節與兩個實測坑（PostToolUse 失敗不觸發、hook 內嵌 find 的 timeout 餘裕）見 [`docs/agent-integration.md`](./docs/agent-integration.md) Mode C；參考實作在 [Ether-prompt hooks](https://github.com/royalskynet/Ether-prompt/tree/main/hooks)。
+
 ### 一鍵自動紀錄（`auto` 一鍵直落）
 
 開發/除錯結束想快速記一筆，不需開 stdin。一行版（`auto --symptom`/`--fix`/`--tags`）：
