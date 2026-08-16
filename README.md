@@ -115,6 +115,7 @@ related: []
 | `fixindex re-index` | 重生 `FIX-INDEX.md` 內 `<!-- fixindex:table -->` 區塊。冪等。 |
 | `fixindex supersede <old> <new>` | 標記 `<old>` 被 `<new>` 取代，保留檔案。 |
 | `fixindex fi` | 從 stdin 補記一條，自動配對 domain。見「寫入」一節。 |
+| `fixindex insights [<主題>]` | 只回 insight 型條目（無參數 = 列出全部）。見「記 insight」。 |
 | `fixindex doctor` | 診斷並修復損壞的 frontmatter。 |
 | `fixindex help` | 顯示說明。 |
 
@@ -133,6 +134,16 @@ printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <可重跑的驗證命令>' |
 ```
 
 自由文字也行（`echo '一行症狀' | fixindex fi`）。`fixindex fi`（零參數）自動：dedup/supersede → domain 匹配 append 新 `## §N`（無匹配則建新檔）→ re-index → commit。不要再手動 append `## §N` 或編輯 frontmatter `symptoms:`。
+
+### 記 insight（已固化設計決策）
+
+insight 型條目記「值得留住、但不是 defect 的設計決策/教訓」。用獨立 KEY（`INSIGHT:` 或 `TYPE: insight` 觸發）：
+
+```bash
+printf 'CONTEXT: ...\nINSIGHT: ...\nIMPLICATION: ...\nREVISIT-WHEN: ...\nQUERIES: q1, q2' | fixindex fi
+```
+
+CONTEXT/INSIGHT/IMPLICATION/REVISIT-WHEN 對應 defect 的 SYMPTOM/ROOT/FIX/VERIFY；`QUERIES` 逗號分隔 → frontmatter `symptoms:`（未來 `fixindex insights` 靠它命中）。insight 與 defect 各走各的 domain/dedup，互不 append、不互相 supersede。
 
 ### 指定 domain（向下相容）
 
@@ -211,11 +222,11 @@ cat agent-snippets/generic.md >> <你的 agent 規則檔>      # 通用
 
 提示詞觸發靠模型自覺，忙起來會漏。支援 lifecycle hooks 的 agent 可把查/記強制在**三個時點**——不是「每動都查」（太吵）也不是「只 plan 前查」（執行期盲）：
 
-1. **plan 起點**：session 還沒跑過 `find` → 注入一次性提醒，對 plan 主題＋工具鏈做域級掃雷，並預判高機率踩雷點（外部服務/權限/timeout/stale state）順帶先查
+1. **plan 起點**：session 還沒跑過 `find` → 自動以 plan 標題跑 `fixindex insights "<標題>"` 注入命中的已固化洞見；另注入一次性提醒，對 plan 主題＋工具鏈做域級掃雷，並預判高機率踩雷點（外部服務/權限/timeout/stale state）順帶先查
 2. **執行期踩雷當下**：同指令指紋已失敗 ≥1 次、正要重試 → hook 直接以上次失敗症狀跑 `fixindex find`，命中條目注入 context 再讓 agent 決定繞路；≥2 次觸發停損
 3. **完工收尾**：疑似除錯 session（≥10 次工具呼叫＋error 跡象）未記 → Stop hook 擋下收尾強制補 `fi`；小任務低於門檻靜默
 
-不失敗不觸發，頻率天然有界；plan 前查不到的雷，踩到當下查得到。實作細節與兩個實測坑（PostToolUse 失敗不觸發、hook 內嵌 find 的 timeout 餘裕）見 [`docs/agent-integration.md`](./docs/agent-integration.md) Mode C；參考實作在 [Ether-prompt hooks](https://github.com/royalskynet/Ether-prompt/tree/main/hooks)。
+不失敗不觸發，頻率天然有界；plan 前查不到的雷，踩到當下查得到。實作細節與兩個實測坑（PostToolUse 失敗不觸發、hook 內嵌 find 的 timeout 餘裕）見 [`docs/agent-integration.md`](./docs/agent-integration.md) Mode C；權威參考實作在本 repo [`hooks/`](./hooks)（`plan-path-notice.js`、`fi-reminder.sh`），Ether-prompt 僅部署副本。
 
 ### 一鍵自動紀錄（`auto` 一鍵直落）
 

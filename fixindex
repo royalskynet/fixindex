@@ -77,6 +77,8 @@ fixindex — symptom→fix lookup for personal bug runbook
 
 Commands:
   fixindex find <keyword>       BM25 + contextual blurb 語意排序（fxsearch）
+  fixindex insights <topic>     find 限 type: insight（設計決策/可轉移洞見）；plan 起點按主題提取
+  fixindex insights             無參數：列出全部 insight 條目
   fixindex grep <keyword>       full-text ripgrep across fix files
   fixindex show <id>            cat fixes/NNNN-*.md
   fixindex list                 list all fix files with title
@@ -171,6 +173,25 @@ _cmd_find_literal() {
       }' | head -40
   echo ""
   echo "(use \`fixindex grep '$kw'\` for full-text search)"
+}
+
+cmd_insights() {
+  if [[ $# -eq 0 ]]; then
+    # 無參數：列出全部 insight 條目（id + title）
+    local f found=false
+    for f in "$FIXDIR"/[0-9]*.md; do
+      [[ -e "$f" ]] || continue
+      grep -q '^type:[[:space:]]*insight' "$f" || continue
+      found=true
+      local base title
+      base=$(basename "$f" .md)
+      title=$(grep -m1 '^title:' "$f" | sed 's/^title:[[:space:]]*//; s/^"//; s/"$//')
+      printf "  %-40s  %s\n" "$base" "$title"
+    done
+    $found || echo "(no insight entries yet — create one: fixindex new <slug> --type insight)"
+    return 0
+  fi
+  cmd_find "$@" --type insight
 }
 
 cmd_grep() {
@@ -1197,6 +1218,7 @@ main() {
   shift || true
   case "$sub" in
     find)        cmd_find "$@" ;;
+    insights)    cmd_insights "$@" ;;
     grep)        cmd_grep "$@" ;;
     show)        cmd_show "$@" ;;
     list)        cmd_list ;;

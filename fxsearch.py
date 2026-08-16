@@ -236,18 +236,20 @@ def _build_entry(fid, fn, sn, heading, fm, bi, cont):
         'file': fn,
         'section': f'§{sn}',
         'heading': heading,
+        'type': str(fm.get('type') or 'defect'),
         'tokens': toks,
     }
 
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: fxsearch.py <query> [--limit N] [--all] [--json]", file=sys.stderr)
+        print("usage: fxsearch.py <query> [--limit N] [--all] [--json] [--type defect|insight]", file=sys.stderr)
         sys.exit(1)
     # Walk flags before positional
     args = sys.argv[1:]
     limit = 8
     json_out = False
+    etype = None
     q = None
     i = 0
     while i < len(args):
@@ -257,15 +259,20 @@ def main():
         elif a == '--limit' and i+1 < len(args):
             limit = int(args[i+1])
             i += 1
+        elif a == '--type' and i+1 < len(args):
+            etype = args[i+1]
+            i += 1
         elif not a.startswith('--'):
             if q is None:
                 q = a
         i += 1
     if q is None:
-        print("usage: fxsearch.py <query> [--limit N] [--json]", file=sys.stderr)
+        print("usage: fxsearch.py <query> [--limit N] [--json] [--type defect|insight]", file=sys.stderr)
         sys.exit(1)
     fixdir = os.environ.get('FIXINDEX_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixes')
     entries = build_entries(fixdir)
+    if etype:
+        entries = [e for e in entries if e['type'] == etype]
     if not entries:
         if json_out:
             print(json.dumps({'query': q, 'hits': []}))

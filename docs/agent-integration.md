@@ -17,6 +17,7 @@ When the user's message begins with the literal word `Fixindex`, the agent must 
 | `Fixindex show NNNN` / mentions a specific ID | `fixindex show NNNN` |
 | `Fixindex grep <inner detail>` (not a symptom you'd expect in the index) | `fixindex grep "<keyword>"` (full-text) |
 | `Fixindex record <fix>` / `Fixindex log <fix>` / `Fixindex new entry` | `printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …' | fixindex fi`（或指定 domain `fixindex fi <domain>`） |
+| `Fixindex insights <主題>` / 想提取已固化的設計決策 | `fixindex insights "<主題>"`（只回 insight 型條目；無參數 = 列出全部） |
 | Brand-new domain, no existing fix file fits | `fixindex new <slug>` |
 | `Fixindex supersede <old>` / `<old> replaced by <new>` | `fixindex supersede <old> <new>` |
 | **`fi` — bare, nothing else in the message** | **Record what the conversation just produced.** See A.1 |
@@ -35,9 +36,22 @@ A bare `fi` (nothing else in the message) means: **write it down now.** Not `fix
 What to write: the **root-cause formula, supporting data, the paths already ruled out, and any portable rule**. Not a changelog of edits. **Record it even when the fix isn't implemented** — write "not fixed", note the next step, and stop. The diagnosis is the asset; it's what stops the next person re-deriving it.
 
 ```bash
-printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <rerunnable command>' | fixindex fi
+printf 'SYMPTOM: ...
+ROOT: ...
+FIX: ...
+VERIFY: <rerunnable command>' | fixindex fi
 ```
 自由文字也行（`echo '一行症狀' | fixindex fi`）；指定 domain 的舊介面 `fixindex fi <domain>` 仍可用。
+
+記 **insight**（已固化的設計決策/教訓，非 defect）用獨立 KEY，`INSIGHT:` 或 `TYPE: insight` 觸發：
+```bash
+printf 'CONTEXT: ...
+INSIGHT: ...
+IMPLICATION: ...
+REVISIT-WHEN: ...
+QUERIES: q1, q2' | fixindex fi
+```
+（CONTEXT/INSIGHT/IMPLICATION/REVISIT-WHEN 對應 defect 的 SYMPTOM/ROOT/FIX/VERIFY；`QUERIES` 逗號分隔 → frontmatter `symptoms:` 供未來 `fixindex insights` 命中；insight 與 defect 各走各的 domain/dedup，互不 append、不互相 supersede。）
 
 ---
 
@@ -114,13 +128,13 @@ Modes A and B rely on the model remembering to fire. Under load it forgets. If y
 
 | Point | Hook event | What fires |
 |---|---|---|
-| 1. Plan start — static sweep | `PreToolUse` on `ExitPlanMode` | If the session has run no `fixindex find` yet, inject a one-shot reminder: domain-level find on the plan's topic + toolchain, plus pre-query the foreseeable failure symptoms (external services, permissions, timeouts, stale state). Runs once, never nags. |
+| 1. Plan start — static sweep + insight pull | `PreToolUse` on `ExitPlanMode` | Auto-runs `fixindex insights "<plan title>"` and injects any hits (already-固化 design decisions worth carrying into this task); plus, if the session has run no `fixindex find` yet, a one-shot reminder: domain-level find on the plan's topic + toolchain, plus pre-query the foreseeable failure symptoms (external services, permissions, timeouts, stale state). Runs once, never nags. |
 | 2. Mid-run — on-failure lookup | `PreToolUse` on `Bash`, mounted on the consecutive-failure counter | When a command fingerprint has already failed ≥1 time and the agent is about to retry, the hook itself runs `fixindex find "<last failure symptom>"` and injects the hits into context before the retry. At ≥2 failures the stop-loss notice takes over. |
 | 3. Wrap-up — fi gate | `Stop` | If the transcript looks like a debug session (≥10 tool calls + error markers) and no `fixindex fi/new/auto` was run, return `{"decision":"block"}` to force a catch-up entry (or a one-line "nothing to record"). Guard with `stop_hook_active` to prevent loops; stay silent for small tasks below the call threshold. |
 
 Properties: no failure → no trigger, so frequency is naturally bounded; mines the plan-time sweep can't see are caught the moment you step on them (point 2 covers the mid-run blind spot).
 
-Reference implementation: [`hooks/plan-path-notice.js` and `hooks/fi-reminder.sh` in Ether-prompt](https://github.com/royalskynet/Ether-prompt/tree/main/hooks).
+Reference implementation (authoritative): [`hooks/plan-path-notice.js` and `hooks/fi-reminder.sh` in this repo](../hooks). Ether-prompt 僅保留部署副本。
 
 Two hard-won implementation notes: (a) `PostToolUse` does **not** fire when a Bash command exits non-zero and its payload has no exit code — read `is_error` from the session transcript instead; (b) time your `fixindex find` before embedding it in a hook (measured ~2.8 s) and give the subprocess timeout 1.5× headroom, or every lookup silently returns empty.
 

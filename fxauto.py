@@ -337,6 +337,165 @@ def _pull_first_if_repo():
     return None
 
 
+def build_entry_insight(fid, title, context, insight, implication, revisit, slug,
+                        queries, tags=None, detail=''):
+    """Insight 條目 scaffold：frontmatter 帶 `type: insight`，symptoms=QUERIES（未來查詢句），
+    body §1 Context / §2 Insight / §3 Implication / §4 Revisit-when。"""
+    parts = []
+    parts.append('---')
+    parts.append(f'id: {fid}')
+    parts.append(f'slug: {slug}')
+    parts.append('type: insight')
+    parts.append(f'title: {title}')
+    tag_items = ['auto', 'insight'] + (tags or [])
+    parts.append('tags:\n' + '\n'.join(f'  - {t}' for t in tag_items))
+    parts.append('symptoms:')
+    for q in queries:
+        parts.append(f'  - {q}')
+    parts.append('status: active')
+    parts.append('supersedes: []')
+    parts.append('related: []')
+    parts.append('---')
+    parts.append('')
+    parts.append(f'# {fid} {title}')
+    parts.append('')
+    parts.append('## §1 Context')
+    parts.append('')
+    parts.append(context)
+    parts.append('')
+    parts.append('## §2 Insight')
+    parts.append('')
+    parts.append(insight)
+    parts.append('')
+    parts.append('## §3 Implication')
+    parts.append('')
+    parts.append(implication)
+    parts.append('')
+    parts.append('## §4 Revisit-when')
+    parts.append('')
+    parts.append(revisit)
+    if detail:
+        parts.append('')
+        parts.append('## §5 詳情')
+        parts.append('')
+        parts.append(detail)
+    return '\n'.join(parts) + '\n'
+
+
+def _append_to_file_insight(path, title, context, insight, implication, revisit,
+                            queries, detail=''):
+    """Insight 版 domain append：§N 用 Context/Insight/Implication/Revisit-when 標籤，
+    並把 QUERIES 併入 frontmatter symptoms（未來查詢句可被 find 命中）。"""
+    import shutil
+    with open(path) as f:
+        txt = f.read()
+    snap = os.path.join(tempfile.gettempdir(),
+                        f'fi-undo-{os.path.basename(path)}.{os.getpid()}')
+    try:
+        shutil.copy(path, snap)
+    except Exception:
+        snap = None
+    secs = [int(m) for m in re.findall(r'^## §(\d+)', txt, re.M)]
+    n = (max(secs) + 1) if secs else 1
+    lines = [f'## §{n} {title or "記錄"}', '']
+    lines.append('**Context:** ' + context)
+    lines.append('')
+    lines.append('**Insight:** ' + insight)
+    lines.append('')
+    lines.append('**Implication:** ' + implication)
+    lines.append('')
+    lines.append('**Revisit-when:** ' + revisit)
+    lines.append('')
+    if detail:
+        lines.append(detail)
+        lines.append('')
+    with open(path, 'a') as f:
+        f.write('\n' + '\n'.join(lines) + '\n')
+    _merge_symptoms(path, queries)
+    return snap, n
+
+
+def _pipeline_insight(ini, detail, mode, tags_arg):
+    """INSIGHT: pipe 的寫入管線（shadow/dedup-supersede/domain-append/newfile，
+    與 defect 管線平行；etype 全帶 insight）。QUERIES → symptoms 供未來查詢。"""
+    title = (ini.get('insight') or ini.get('context') or 'untitled')[:80]
+    if not title.strip():
+        print('INSIGHT or CONTEXT required for insight mode (provide CONTEXT: / INSIGHT:)',
+              file=sys.stderr)
+        sys.exit(1)
+    context = ini.get('context', '')
+    insight = ini.get('insight', '')
+    impl = ini.get('implication', '')
+    revisit = ini.get('revisit-when', '')
+    queries = [q.strip() for q in re.split(r'[,，]', ini.get('queries', '')) if q.strip()]
+    if not queries:
+        queries = [insight.strip()] if insight.strip() else []
+    tags = []
+    if tags_arg:
+        tags = [t.strip() for t in re.split(r'[,，\s]+', tags_arg) if t.strip()]
+    # matching symps 用 CONTEXT（對應 defect SYMPTOM 做 domain/dedup 分級）
+    symps = [s.strip() for s in context.split(';') if s.strip()] or queries[:1]
+
+    dup = find_duplicate(title, etype='insight')
+    if mode == '--shadow':
+        payload = {'etype': 'insight',
+                   'preview_lines': len(build_entry_insight(
+                       next_id(), title, context, insight, impl, revisit, '',
+                       queries, tags).split('\n'))}
+        payload['dedup'] = {'supersedes': dup[0], 'overlap': round(dup[1], 2)} if dup else None
+        print(json.dumps(payload))
+        return
+
+    if dup:
+        old_id = dup[0]
+        new_id = next_id()
+        slug = slugify(title)
+        entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
+                                    slug, queries, tags, detail)
+        os.makedirs(FIXINDEX_DIR, exist_ok=True)
+        import glob as _g
+        old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
+        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
+        with open(path, 'w') as f:
+            f.write(entry)
+        _run_index(f'supersede {old_id} {new_id}')
+        payload = {'created': path, 'dedup': True, 'supersedes': old_id}
+        payload.update(_git_commit_push([path, _resolve_index_file()] + old_files))
+        print(json.dumps(payload))
+        if payload.get('git_error'):
+            sys.exit(1)
+        return
+
+    match = find_domain_file_auto(title, symps, etype='insight')
+    if match:
+        snap, secn = _append_to_file_insight(match, title, context, insight, impl,
+                                             revisit, queries, detail)
+        _run_index('re-index')
+        payload = {'appended': os.path.basename(match), 'section': secn,
+                   'dedup': False, 'undo': snap}
+        payload.update(_git_commit_push([match, _resolve_index_file()]))
+        print(json.dumps(payload))
+        if payload.get('git_error'):
+            sys.exit(1)
+        return
+
+    fid = next_id()
+    slug = slugify(title)
+    entry = build_entry_insight(fid, title, context, insight, impl, revisit,
+                                slug, queries, tags, detail)
+    os.makedirs(FIXINDEX_DIR, exist_ok=True)
+    path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
+    with open(path, 'w') as f:
+        f.write(entry)
+    _run_index('re-index')
+    payload = {'created': path, 'dedup': False}
+    payload.update(_git_commit_push([path, _resolve_index_file()]))
+    print(json.dumps(payload))
+    if payload.get('git_error'):
+        sys.exit(1)
+    return
+
+
 def main():
     args = sys.argv[1:]
     plerr = _pull_first_if_repo()
@@ -380,15 +539,31 @@ def main():
     #   - KEY 行（SYMPTOM/ROOT/FIX/VERIFY）補進 flags 沒給的欄位
     #   - 非 KEY 行整段保留 → §5 詳情（實測數據/無效嘗試落點）
     detail_lines = []
+    insight_fields = {}
     stdin_text = sys.stdin.read() if not sys.stdin.isatty() else ''
     for raw in stdin_text.splitlines():
         st = raw.strip()
-        m = re.match(r'^([A-Z]+):\s*(.+)', st)
-        if m and m.group(1).lower() in ('symptom', 'root', 'fix', 'verify'):
-            fields.setdefault(m.group(1).lower(), m.group(2).strip())
+        m = re.match(r'^([A-Z][A-Z-]*):\s*(.+)', st)
+        if m:
+            k = m.group(1).lower()
+            v = m.group(2).strip()
+            if k in ('symptom', 'root', 'fix', 'verify'):
+                fields.setdefault(k, v)
+            elif k in ('context', 'insight', 'implication', 'revisit-when', 'queries', 'type'):
+                insight_fields[k] = v
+            else:
+                detail_lines.append(raw)
         elif st:
             detail_lines.append(raw)
     detail = '\n'.join(detail_lines)
+
+    # --- insight 路徑：INSIGHT: key 或 TYPE: insight → 改走 insight 管線，
+    #     用 CONTEXT/INSIGHT/IMPLICATION/REVISIT-WHEN（對應 defect 的
+    #     SYMPTOM/ROOT/FIX/VERIFY）+ QUERIES（未來查詢句 → symptoms）。
+    #     etype 全帶 insight，與 defect 互不污染（insight/defect 不互相
+    #     supersede、不互相 append）。---
+    if ('insight' in insight_fields) or (insight_fields.get('type', '').strip().lower() == 'insight'):
+        return _pipeline_insight(insight_fields, detail, mode, tags_arg)
 
     sympt = fields.get('symptom', '')
     if not sympt:
