@@ -1213,6 +1213,30 @@ EOF
   fi
 }
 
+cmd_status_lint() {
+  # R3-4: status: superseded 但 supersedes 為空 → 報錯（0452 形態）
+  local dir="${FIXINDEX_DIR:-${FIXDIR:-$HOME/.claude/projects/-Users-51mini/memory/fixes}}"
+  [[ -d "$dir" ]] || { echo "fixindex status lint: FIXINDEX_DIR 不存在: $dir"; return 1; }
+  local f status supersedes bad=0
+  for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md "$dir"/[0-9][0-9][0-9][0-9].md; do
+    [[ -f "$f" ]] || continue
+    status=$(awk '/^status:/ {sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
+    supersedes=$(awk '/^supersedes:/ {sub(/^supersedes:[[:space:]]*/,""); print; exit}' "$f")
+    if [[ "$status" == "superseded" ]]; then
+      if [[ -z "$supersedes" || "$supersedes" == "[]" || "$supersedes" == "''" ]]; then
+        echo "LINT FAIL: $(basename "$f") status=superseded 但 supersedes 為空（應指向被取代條目）"
+        bad=1
+      fi
+    fi
+  done
+  if [[ $bad -eq 1 ]]; then
+    echo "fixindex status lint: FAIL — 上述條目需補 supersedes 或改回非 superseded"
+    return 1
+  fi
+  echo "fixindex status lint: PASS — 所有 superseded 條目皆有 supersedes"
+  return 0
+}
+
 main() {
   local sub="${1:-help}"
   shift || true
@@ -1224,6 +1248,7 @@ main() {
     list)        cmd_list ;;
     new)         warn_if_default_dir; cmd_new "$@" ;;
     doctor)      warn_if_default_dir; cmd_doctor "$@" ;;
+    status)      warn_if_default_dir; cmd_status_lint "$@" ;;
     re-index)    warn_if_default_dir; cmd_re_index ;;
     supersede)   warn_if_default_dir; cmd_supersede "$@" ;;
     fi)          warn_if_default_dir; cmd_fi "$@" ;;

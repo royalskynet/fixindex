@@ -159,7 +159,7 @@ def _needs_yaml_quotes(s: str) -> bool:
     if s and s[0] in '-?:,[]{}&#*!|>%@`':
         return True
     # contains backslash
-    if '\\\\' in s:
+    if '\\' in s:
         return True
     return False
 
@@ -173,13 +173,13 @@ def _yaml_quote(s: str) -> str:
         return "'" + s.replace("'", "''") + "'"
     if has_single and not has_double:
         # use double quotes, escape internal double quotes
-        return '"' + s.replace('"', '\\\\"') + '"'
+        return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
     if has_double and has_single:
         # both present: use single quotes, escape internal single quotes
         return "'" + s.replace("'", "''") + "'"
     # no quotes inside: prefer double quotes for backslash handling
-    if '\\\\' in s:
-        return '"' + s.replace('"', '\\\\"') + '"'
+    if '\\' in s:
+        return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
     # default: double quotes
     return '"' + s + '"'
 
@@ -273,7 +273,8 @@ def normalize_file(path, dry=True):
                     else:
                         new_fm += f'  - {item}\n'
         else:
-            new_fm += f'{k}: {v}\n'
+            sv = str(v)
+            new_fm += f'{k}: {_yaml_quote(sv) if _needs_yaml_quotes(sv) else sv}\n'
     # non-order fields (if any)
     for k, v in fm.items():
         if k in ORDER or k.startswith('_'):
@@ -286,7 +287,8 @@ def normalize_file(path, dry=True):
                 else:
                     new_fm += f'  - {item}\n'
         else:
-            new_fm += f'{k}: {v}\n'
+            sv = str(v)
+            new_fm += f'{k}: {_yaml_quote(sv) if _needs_yaml_quotes(sv) else sv}\n'
     new_fm += '---\n'
 
     # keep body as-is
@@ -368,3 +370,5 @@ if __name__ == '__main__':
     KNOWN_LISTS = KNOWN_LISTS = KNOWN_LISTS
     dir = os
     main()
+
+
