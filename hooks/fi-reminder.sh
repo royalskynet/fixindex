@@ -23,6 +23,18 @@ if grep -qE 'fixindex (fi|new|auto)' "$TP" 2>/dev/null; then
   exit 0
 fi
 
+# ---- 閘門（Phase 3b）：transcript 有 git commit/push 跡象 → fixindex status --assert-clean ----
+# 讓「commit 完沒 push 就宣告完成」物理上不可能：非 clean → block，reason 帶實際項目。
+# clean（或 fixindex 不可用）→ 續跑既有邏輯。
+if command -v fixindex >/dev/null 2>&1 && grep -qE 'git[^\"\n]*(commit|push)|git add .*(&&|;).*git commit' "$TP" 2>/dev/null; then
+  STATUS_OUT=$(fixindex status 2>&1); STATUS_RC=$?
+  if [[ $STATUS_RC -ne 0 ]]; then
+    REASON=$(printf '%s' "$STATUS_OUT" | grep -E 'ERROR|ahead|behind|stale|FAIL' | head -4 | tr '\n' ' ')
+    printf '{"decision":"block","reason":"fi-reminder: 本次有 git commit 跡象，但 fixindex status 非 clean（%s）。補同步後再停：先 `fixindex status` 看細節，unpushed commit 直接 push；若確認不需同步，設 FIXINDEX_NO_SYNC=1 並一句話說明後即可停。"}' "${REASON:-status 異常}"
+    exit 0
+  fi
+fi
+
 # 規模門檻：小任務（工具呼叫少）不值 fi 成本 → 靜默。
 # 以 transcript 內 tool_use 行數近似總呼叫數；閾值 10。
 # grep -c 無命中時自己就印 0（exit 1），不能再 || echo 0 疊第二行。

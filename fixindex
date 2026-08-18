@@ -21,6 +21,66 @@ FIXDIR_IS_DEFAULT=$([[ -n "${FIXINDEX_DIR:-}" ]] && echo 0 || echo 1)
 
 die() { echo "fixindex: $*" >&2; exit 1; }
 
+# ===== sync 層（0171：fixindex-git-autosync 復原）=====
+# 目的：寫入命令「先 pull、結尾 commit+push」，寫入即落盤；push 失敗 Fail Loud。
+# GIT_ROOT 用 git rev-parse --show-toplevel 動態解析（0171 §1），非寫死。
+# 逃生門沿用 0171 命名：--no-sync flag（main 剝除）／FIXINDEX_NO_SYNC=1。
+_parse_git_root() { git -C "$FIXDIR" rev-parse --show-toplevel 2>/dev/null || true; }
+_has_upstream() {  # $1=GIT_ROOT；有 upstream → 0
+  git -C "$1" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1
+}
+_sync_disabled() { [[ "${FIXINDEX_NO_SYNC:-}" == "1" ]] && return 0; return 1; }
+
+# 寫入前 pull-first（dirty tree 是常態 → autostash）。pull 失敗 → die，不在過時基礎寫入。
+sync_pull() {
+  _sync_disabled && return 0
+  local gr; gr=$(_parse_git_root)
+  [[ -n "$gr" ]] || return 0          # 非 git repo → no-op
+  _has_upstream "$gr" || return 0     # 無 upstream（feature 分支）→ 靜默跳過
+  if ! git -C "$gr" pull --rebase --autostash >/dev/null 2>&1; then
+    die "sync_pull: git pull 失敗，不在過時基礎上寫入 — 手動 'git -C $gr pull --rebase --autostash' 解決後重試，或 FIXINDEX_NO_SYNC=1 跳過"
+  fi
+}
+
+# 唯讀命令的 soft pull：pull 失敗只印警告續跑（可離線），不 die。
+sync_pull_soft() {
+  _sync_disabled && return 0
+  local gr; gr=$(_parse_git_root)
+  [[ -n "$gr" ]] || return 0
+  _has_upstream "$gr" || return 0
+  if ! git -C "$gr" pull --rebase --autostash >/dev/null 2>&1; then
+    echo "fixindex: warning — 唯讀 sync pull 失敗，續跑（可能非最新）" >&2
+  fi
+}
+
+# 結尾：add -A → commit（帶 Co-Authored-By）→ push；無變動 → 靜默。
+# push 失敗 → die（Fail Loud，不靜默吃錯）。無 upstream → 只 commit 不 push。
+sync_push() {
+  _sync_disabled && return 0
+  local gr; gr=$(_parse_git_root)
+  [[ -n "$gr" ]] || { echo "(no git repo, skip sync_push)"; return 0; }
+  git -C "$gr" add -A
+  if git -C "$gr" diff --cached --quiet; then
+    echo "(no changes to commit)"
+    return 0
+  fi
+  local cmsg
+  cmsg="fixindex: autosync"
+  git -C "$gr" commit -m "$cmsg" \
+    -m "Co-Authored-By: Claude <noreply@anthropic.com>" \
+    -m "Co-Authored-By: Happy <noreply@anthropic.com>" >/dev/null 2>&1 \
+    || die "sync_push: git commit 失敗（Fail Loud）"
+  if ! _has_upstream "$gr"; then
+    echo "sync_push: committed（無 upstream，未 push）"
+    return 0
+  fi
+  if ! git -C "$gr" push >/dev/null 2>&1; then
+    die "sync_push: git push 失敗（Fail Loud）— 檢查 remote/網路後重試，或 FIXINDEX_NO_SYNC=1 跳過"
+  fi
+  echo "sync_push: pushed"
+}
+
+
 slugify() {
   local input="$1"
   local result
@@ -113,6 +173,9 @@ Env:
   FIXINDEX_DIR    override fixes/ dir (default: ./fixes)
   FIXINDEX_INDEX  override FIX-INDEX.md path (default: ./FIX-INDEX.md)
   RG              ripgrep binary (default: rg)
+  FIXINDEX_NO_SYNC=1  停用自動同步（寫入命令不 pull/push；亦可用 --no-sync flag）
+
+Sync: 寫入命令（new/re-index/supersede/doctor/fi）寫入前 git pull、結尾 commit+push（寫入即落盤，push 失敗 Fail Loud）；唯讀命令 soft-pull 失敗僅警告續跑。逃生門：--no-sync 或 FIXINDEX_NO_SYNC=1。
 EOF
 }
 
@@ -484,12 +547,12 @@ cmd_fi() {
     die "domain must not start with '-' (got: $domain)"
   fi
   shift
-  local title="" tags="" do_push=false force_new=false
+  local title="" tags="" do_push=true force_new=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --title) title="$2"; shift 2 ;;
       --tags) tags="$2"; shift 2 ;;
-      --push) do_push=true; shift ;;
+      --push) shift ;;   # 已預設開啟，保留為 no-op 相容（逃生門用 --no-sync / FIXINDEX_NO_SYNC=1）
       --new)  force_new=true; shift ;;
       *) shift ;;
     esac
@@ -497,6 +560,7 @@ cmd_fi() {
   local body
   body=$(cat)
   [[ -n "$body" ]] || die "no body provided on stdin"
+  sync_pull
   with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$force_new" "$body"
 }
 
@@ -707,26 +771,7 @@ PYEOF
   fi
 
   cmd_re_index
-
-  if [[ "$do_push" == "true" ]]; then
-    local repo_root
-    repo_root=$(cd "$(dirname "$FIXDIR")" && pwd 2>/dev/null) || true
-    if [[ -d "$repo_root/.git" ]]; then
-      cd "$repo_root"
-      git add "$FIXDIR/" "$INDEX_FILE" 2>/dev/null || true
-      git add -u "$FIXDIR/" "$INDEX_FILE" 2>/dev/null || true
-      if git diff --cached --quiet 2>/dev/null; then
-        echo "(no changes to commit)"
-      else
-        git commit -m "fixindex(fi): ${title:-update $domain}" 2>/dev/null \
-          && git push origin main 2>/dev/null \
-          && echo "pushed" \
-          || echo "commit/push failed"
-      fi
-    else
-      echo "(no git repo, skip push)"
-    fi
-  fi
+  sync_push
 }
 # Extract frontmatter block (lines between --- markers, excluding the markers)
 _get_frontmatter() {
@@ -1291,14 +1336,17 @@ cmd_status_lint() {
   # R3-4: status: superseded 但 supersedes 為空 → 報錯（0452 形態）
   local dir="${FIXINDEX_DIR:-${FIXDIR:-$HOME/.claude/projects/-Users-51mini/memory/fixes}}"
   [[ -d "$dir" ]] || { echo "fixindex status lint: FIXINDEX_DIR 不存在: $dir"; return 1; }
-  local f status supersedes bad=0
+  local f status supersedes superseded_by bad=0
   for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md "$dir"/[0-9][0-9][0-9][0-9].md; do
     [[ -f "$f" ]] || continue
     status=$(awk '/^status:/ {sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
     supersedes=$(awk '/^supersedes:/ {sub(/^supersedes:[[:space:]]*/,""); print; exit}' "$f")
+    superseded_by=$(awk '/^superseded_by:/ {sub(/^superseded_by:[[:space:]]*/,""); print; exit}' "$f")
     if [[ "$status" == "superseded" ]]; then
-      if [[ -z "$supersedes" || "$supersedes" == "[]" || "$supersedes" == "''" ]]; then
-        echo "LINT FAIL: $(basename "$f") status=superseded 但 supersedes 為空（應指向被取代條目）"
+      # 被取代的 stub 用 superseded_by 表達「被誰取代」——合法；兩欄皆空才是異常
+      if { [[ -z "$supersedes" || "$supersedes" == "[]" || "$supersedes" == "''" ]] \
+           && [[ -z "$superseded_by" ]]; }; then
+        echo "LINT FAIL: $(basename "$f") status=superseded 但 supersedes 與 superseded_by 皆空"
         bad=1
       fi
     fi
@@ -1311,22 +1359,44 @@ cmd_status_lint() {
   return 0
 }
 
+# status 主入口：fxstatus.py（三段：index 時效 / git 同步 / lint）；缺檔 fallback 舊 lint
+_cmd_status_fxstatus() {
+  local self="${BASH_SOURCE[0]}"
+  [[ -L "$self" ]] && self="$(readlink "$self")"
+  local fxstatus="${self%/*}/fxstatus.py"
+  if [[ -f "$fxstatus" ]]; then
+    FIXINDEX_DIR="$FIXDIR" FIXINDEX_INDEX="$INDEX_FILE" python3 "$fxstatus" "$@"
+    return $?
+  fi
+  cmd_status_lint "$@"
+}
+
 main() {
+  # 逃生門：--no-sync 在 arg list 任意位置剝除 → FIXINDEX_NO_SYNC=1
+  local args=() a
+  for a in "$@"; do
+    if [[ "$a" == "--no-sync" ]]; then
+      FIXINDEX_NO_SYNC=1
+    else
+      args+=("$a")
+    fi
+  done
+  set -- "${args[@]}"
   local sub="${1:-help}"
   shift || true
   case "$sub" in
-    find)        cmd_find "$@" ;;
-    insights)    cmd_insights "$@" ;;
-    grep)        cmd_grep "$@" ;;
-    show)        cmd_show "$@" ;;
-    list)        cmd_list ;;
-    new)         warn_if_default_dir; cmd_new "$@" ;;
-    doctor)      warn_if_default_dir; cmd_doctor "$@" ;;
-    status)      warn_if_default_dir; cmd_status_lint "$@" ;;
-    re-index)    warn_if_default_dir; cmd_re_index ;;
-    supersede)   warn_if_default_dir; cmd_supersede "$@" ;;
-    fi)          warn_if_default_dir; cmd_fi "$@" ;;
-    auto)        warn_if_default_dir; cmd_auto "$@" ;;
+    find)      sync_pull_soft; cmd_find "$@" ;;
+    insights)  sync_pull_soft; cmd_insights "$@" ;;
+    grep)      sync_pull_soft; cmd_grep "$@" ;;
+    show)      sync_pull_soft; cmd_show "$@" ;;
+    list)      sync_pull_soft; cmd_list ;;
+    new)       warn_if_default_dir; sync_pull; cmd_new "$@"; sync_push ;;
+    doctor)    warn_if_default_dir; sync_pull; cmd_doctor "$@"; sync_push ;;
+    status)    warn_if_default_dir; _cmd_status_fxstatus "$@" ;;
+    re-index)  warn_if_default_dir; sync_pull; cmd_re_index; sync_push ;;
+    supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@"; sync_push ;;
+    fi)        warn_if_default_dir; cmd_fi "$@" ;;
+    auto)      warn_if_default_dir; cmd_auto "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $sub (try 'fixindex help')" ;;
   esac
