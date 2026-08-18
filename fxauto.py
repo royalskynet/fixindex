@@ -118,7 +118,7 @@ def _derive_title(text, limit=60):
             best = i
             break
     if best >= 0:
-        return text[:best + 1].rstrip()
+        return text[:best + 1].rstrip('；;，,、（(【—-–— ')
     # 無邊界 → 硬切補 …
     return text[:limit] + '…'
 
