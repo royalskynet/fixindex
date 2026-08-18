@@ -12,6 +12,12 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile
 import fxmeta
+import fxsync
+
+# B2: STRICT_DIR=1 且未顯式設定 → 禁止回退（module 載入即擋，不給任何執行路徑）
+if fxsync.strict_dir_guard(os.environ.get('FIXINDEX_DIR')):
+    sys.stderr.write("fixindex: STRICT_DIR: FIXINDEX_DIR 未顯式設定，拒絕回退\n")
+    sys.exit(1)
 
 FIXINDEX_DIR = os.environ.get('FIXINDEX_DIR',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixes'))
@@ -310,9 +316,13 @@ def _run_index(cmd, *args):
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixindex')
     if not os.path.exists(script):
         script = 'fixindex'  # fall back to PATH
-    env = dict(os.environ)
+    env = fxsync.child_env(dict(os.environ))
     env['FIXINDEX_DIR'] = FIXINDEX_DIR
     env['FIXINDEX_INDEX'] = _resolve_index_file()
+    # bash 子指令（re-index/supersede）只產檔/重建 index，不自己 commit+push；
+    # commit/push 統一由 fxauto 結尾單一 _git_commit_push 收（paths 已含 index/old/new）
+    # → 修 0171 復發（fxauto 每回合 2 commits：子指令 push + 結尾 push）
+    env['FIXINDEX_NO_SYNC'] = '1'
     quiet = not cmd.startswith('re-index')
     if cmd == 're-index':
         return subprocess.run([script] + cmd.split(' ') + list(args), env=env)
@@ -353,78 +363,27 @@ def _verify_written(path, snap=None):
 
 
 def _git_commit_push(paths):
-    """If FIXINDEX_DIR sits inside a git repo, add the given paths, commit with
-    a fixindex message, and push. Returns a dict reflecting reality
-    (宣告≠生效): committed=<short hash>|None, pushed=bool, git_error=<str>|None.
-    All git calls use list-arg subprocess (no shell, no '>' redirect chars).
-    Raises RuntimeError on commit/add failure (so caller can set exit code)."""
-    try:
-        r = subprocess.run(
-            ['git', '-C', FIXINDEX_DIR, 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True)
-    except Exception as e:
-        return {'committed': None, 'pushed': False, 'git_error': f'git unavailable: {e}'}
-    repo = (r.stdout or '').strip()
-    if r.returncode != 0 or not repo:
-        # 不在 git repo（sandbox）→ 不算錯誤
-        return {'committed': None, 'pushed': False, 'git_error': None}
+    """Thin wrapper over fxsync.push — 維持 fxauto 既有 JSON 契約。
 
-    # macOS /tmp → /private/tmp symlink：統一用 realpath 比對與算相對路徑
-    fixdir_real = os.path.realpath(FIXINDEX_DIR)
-    if not os.path.realpath(fixdir_real).startswith(os.path.realpath(repo) + os.sep):
-        return {'committed': None, 'pushed': False, 'git_error': None}
-
-    rel = []
-    for p in paths:
-        rp = os.path.realpath(p)
-        if os.path.exists(rp):
-            rel.append(os.path.relpath(rp, os.path.realpath(repo)))
-    add = subprocess.run(['git', '-C', repo, 'add', '--'] + rel,
-                         capture_output=True, text=True)
-    if add.returncode != 0:
-        return {'committed': None, 'pushed': False,
-                'git_error': f'git add: {(add.stderr or add.stdout).strip()[:200]}'}
-    # commit only if there are staged changes
-    diff = subprocess.run(['git', '-C', repo, 'diff', '--cached', '--quiet'],
-                          capture_output=True, text=True)
-    if diff.returncode == 0:
-        return {'committed': None, 'pushed': False, 'git_error': None}  # 無變動
-    title = os.path.basename(paths[0]) if paths else 'update'
-    cmsg = f"fixindex: {title}"
-    cm = subprocess.run(['git', '-C', repo, 'commit', '-m', cmsg],
-                        capture_output=True, text=True)
-    if cm.returncode != 0:
-        return {'committed': None, 'pushed': False,
-                'git_error': f'git commit: {(cm.stderr or cm.stdout).strip()[:200]}'}
-    short = 'unknown'
-    m = re.search(r'\[[^\]]+ ([0-9a-f]{7,})', cm.stdout or '')
-    if m:
-        short = m.group(1)
-    push = subprocess.run(['git', '-C', repo, 'push'],
-                          capture_output=True, text=True)
-    if push.returncode != 0:
-        return {'committed': short, 'pushed': False,
-                'git_error': f'git push: {(push.stderr or push.stdout).strip()[:200]}'}
-    return {'committed': short, 'pushed': True, 'git_error': None}
+    committed=<short hash>|None, pushed=bool, git_error=<str>|None。
+    git_error 只在 kind ∈ (conflict, fatal) 填（離線不 die：另給 pending_push=True，
+    caller 的 git_error 檢查因此不 exit 1）。所有 git 由 fxsync 統一執行。"""
+    res = fxsync.push(FIXINDEX_DIR, paths=paths)
+    out = {'committed': res.get('committed'), 'pushed': bool(res.get('pushed')),
+           'git_error': None}
+    if res.get('kind') in ('conflict', 'fatal'):
+        out['git_error'] = res.get('detail') or res.get('reason') or 'sync_push 失敗'
+    if res.get('kind') == 'offline':
+        out['pending_push'] = True
+    return out
 
 
 def _pull_first_if_repo():
-    """寫入前 pull-first：若 FIXINDEX_DIR 在 git repo，先收 remote 變更，避免在
-    落後上游直接 commit+push（仿 0394 force-push 覆寫事故）。sandbox（非 git）
-    為 no-op。失敗→回傳錯誤字串（呼叫端決定中止）。"""
-    try:
-        r = subprocess.run(
-            ['git', '-C', FIXINDEX_DIR, 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True)
-    except Exception:
-        return None
-    repo = (r.stdout or '').strip()
-    if r.returncode != 0 or not repo:
-        return None
-    pf = subprocess.run(['git', '-C', repo, 'pull', '--rebase', '--autostash'],
-                        capture_output=True, text=True)
-    if pf.returncode != 0:
-        return f'pull-first: {(pf.stderr or pf.stdout).strip()[:200]}'
+    """寫入前 pull-first（fxsync.pull）。sandbox（非 git）→ no-op；離線 → 續跑
+    （push 端會留 pending marker）。失敗→回傳錯誤字串（呼叫端中止）。"""
+    res = fxsync.pull(FIXINDEX_DIR)
+    if not res.get('ok'):
+        return res.get('reason') or res.get('stderr') or 'pull-first 失敗'
     return None
 
 

@@ -8,76 +8,66 @@ set -euo pipefail
 # (FIXINDEX_DIR / FIXINDEX_INDEX) to point at your own runbook checkout.
 # 若未設定 → 從 ~/.zshenv 單一源自動讀取（worker 不必自己 export）。
 # eval 而非 sed 抽值：BSD sed 不吃 \+，且 zshenv 的值含 $HOME 需要展開。
+# B1: 來源判定移到 eval 之前（修 FIXDIR_IS_DEFAULT 恆 0 死碼）
+if [[ -n "${FIXINDEX_DIR:-}" ]]; then FIXDIR_SOURCE=explicit; else FIXDIR_SOURCE=fallback; fi
+
+# B2: FIXINDEX_STRICT_DIR=1 且 FIXINDEX_DIR 未顯式提供 → 拒絕一切回退（跳過 eval）
+if [[ "${FIXINDEX_STRICT_DIR:-}" == "1" && "$FIXDIR_SOURCE" != explicit ]]; then
+  echo "fixindex: STRICT_DIR: FIXINDEX_DIR 未顯式設定，拒絕回退" >&2
+  exit 1
+fi
+
+# 既有兩段 zshenv eval 保持不動
 if [[ -z "${FIXINDEX_DIR:-}" && -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_DIR=' "$HOME/.zshenv" | head -1 || true)"
 fi
 if [[ -z "${FIXINDEX_INDEX:-}" && -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_INDEX=' "$HOME/.zshenv" | head -1 || true)"
 fi
+if [[ "$FIXDIR_SOURCE" == fallback ]]; then
+  if [[ -n "${FIXINDEX_DIR:-}" ]]; then FIXDIR_SOURCE=zshenv; else FIXDIR_SOURCE=cwd; fi
+fi
 FIXDIR="${FIXINDEX_DIR:-$PWD/fixes}"
 INDEX_FILE="${FIXINDEX_INDEX:-$PWD/FIX-INDEX.md}"
 RG="${RG:-rg}"
-FIXDIR_IS_DEFAULT=$([[ -n "${FIXINDEX_DIR:-}" ]] && echo 0 || echo 1)
+FIXDIR_IS_DEFAULT=$([[ "$FIXDIR_SOURCE" == cwd ]] && echo 1 || echo 0)
 
 die() { echo "fixindex: $*" >&2; exit 1; }
 
-# ===== sync 層（0171：fixindex-git-autosync 復原）=====
-# 目的：寫入命令「先 pull、結尾 commit+push」，寫入即落盤；push 失敗 Fail Loud。
-# GIT_ROOT 用 git rev-parse --show-toplevel 動態解析（0171 §1），非寫死。
-# 逃生門沿用 0171 命名：--no-sync flag（main 剝除）／FIXINDEX_NO_SYNC=1。
-_parse_git_root() { git -C "$FIXDIR" rev-parse --show-toplevel 2>/dev/null || true; }
-_has_upstream() {  # $1=GIT_ROOT；有 upstream → 0
-  git -C "$1" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1
-}
+# ===== sync 層（0171/0467：單一同步權威 fxsync.py；消雙 commit / 真逃生門 / 離線分級）=====
+# 所有 git 同步邏輯收斂於 fxsync.py。bash 端只剩薄 wrapper：
+#   sync_pull       寫入前 pull-first（含離線積壓補推）；失敗 → die
+#   sync_pull_soft  唯讀命令下拉；失敗只警告續跑
+#   sync_push       結尾 commit+push（paths-scoped，不 add -A —— 不掃別人的檔）
+#     離線 → 留 pending marker 續跑（exit 0）；conflict/fatal → die（帶真實 git stderr）
+# 逃生門：--no-sync flag（main 剝除）／FIXINDEX_NO_SYNC=1（fxsync 集中判斷）。
 _sync_disabled() { [[ "${FIXINDEX_NO_SYNC:-}" == "1" ]] && return 0; return 1; }
+_script_dir0() {
+  local self="${BASH_SOURCE[0]}"; [[ -L "$self" ]] && self="$(readlink "$self")"
+  cd "$(dirname "$self")" && pwd
+}
+FX_DIR="$(_script_dir0)"
 
-# 寫入前 pull-first（dirty tree 是常態 → autostash）。pull 失敗 → die，不在過時基礎寫入。
 sync_pull() {
   _sync_disabled && return 0
-  local gr; gr=$(_parse_git_root)
-  [[ -n "$gr" ]] || return 0          # 非 git repo → no-op
-  _has_upstream "$gr" || return 0     # 無 upstream（feature 分支）→ 靜默跳過
-  if ! git -C "$gr" pull --rebase --autostash >/dev/null 2>&1; then
-    die "sync_pull: git pull 失敗，不在過時基礎上寫入 — 手動 'git -C $gr pull --rebase --autostash' 解決後重試，或 FIXINDEX_NO_SYNC=1 跳過"
-  fi
+  python3 "$FX_DIR/fxsync.py" pull \
+    || die "sync_pull: 無法在過時基礎上寫入（看上面 stderr）；或 FIXINDEX_NO_SYNC=1 跳過"
 }
 
-# 唯讀命令的 soft pull：pull 失敗只印警告續跑（可離線），不 die。
 sync_pull_soft() {
   _sync_disabled && return 0
-  local gr; gr=$(_parse_git_root)
-  [[ -n "$gr" ]] || return 0
-  _has_upstream "$gr" || return 0
-  if ! git -C "$gr" pull --rebase --autostash >/dev/null 2>&1; then
-    echo "fixindex: warning — 唯讀 sync pull 失敗，續跑（可能非最新）" >&2
-  fi
+  python3 "$FX_DIR/fxsync.py" pull --soft || true
 }
 
-# 結尾：add -A → commit（帶 Co-Authored-By）→ push；無變動 → 靜默。
-# push 失敗 → die（Fail Loud，不靜默吃錯）。無 upstream → 只 commit 不 push。
 sync_push() {
   _sync_disabled && return 0
-  local gr; gr=$(_parse_git_root)
-  [[ -n "$gr" ]] || { echo "(no git repo, skip sync_push)"; return 0; }
-  git -C "$gr" add -A
-  if git -C "$gr" diff --cached --quiet; then
-    echo "(no changes to commit)"
-    return 0
-  fi
-  local cmsg
-  cmsg="fixindex: autosync"
-  git -C "$gr" commit -m "$cmsg" \
-    -m "Co-Authored-By: Claude <noreply@anthropic.com>" \
-    -m "Co-Authored-By: Happy <noreply@anthropic.com>" >/dev/null 2>&1 \
-    || die "sync_push: git commit 失敗（Fail Loud）"
-  if ! _has_upstream "$gr"; then
-    echo "sync_push: committed（無 upstream，未 push）"
-    return 0
-  fi
-  if ! git -C "$gr" push >/dev/null 2>&1; then
-    die "sync_push: git push 失敗（Fail Loud）— 檢查 remote/網路後重試，或 FIXINDEX_NO_SYNC=1 跳過"
-  fi
-  echo "sync_push: pushed"
+  local args=() p out rc
+  for p in "$@"; do args+=(--path "$p"); done
+  out=$(python3 "$FX_DIR/fxsync.py" push "${args[@]}" 2>&1)
+  rc=$?
+  if [[ $rc -eq 2 ]]; then die "$out"; fi
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
 }
 
 
@@ -120,6 +110,10 @@ with_lock() {
 # a second, silent runbook that `find` will never search from anywhere else.
 # Warn (don't block) so scripted use keeps working.
 warn_if_default_dir() {
+  # B1: zshenv 回退留痕（不阻擋，只在 log 留證據）
+  if [[ "$FIXDIR_SOURCE" == zshenv ]]; then
+    echo "fixindex: 寫入目標來自 ~/.zshenv 回退 → $FIXDIR" >&2
+  fi
   [[ "$FIXDIR_IS_DEFAULT" == 1 ]] || return 0
   cat >&2 <<EOF
 fixindex: WARNING — FIXINDEX_DIR is not set, writing to the current directory:
@@ -361,6 +355,7 @@ EOF
   fi
   echo "$newfile"
   cmd_re_index
+  sync_push "$newfile" "$INDEX_FILE"
 }
 
 cmd_re_index() {
@@ -561,7 +556,6 @@ cmd_fi() {
   local body
   body=$(cat)
   [[ -n "$body" ]] || die "no body provided on stdin"
-  sync_pull
   with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$force_new" "$body"
 }
 
@@ -772,7 +766,11 @@ PYEOF
   fi
 
   cmd_re_index
-  sync_push
+  if [[ -n "${target:-}" ]]; then
+    sync_push "$target" "$INDEX_FILE"
+  else
+    sync_push "$newfile" "$INDEX_FILE"
+  fi
 }
 # Extract frontmatter block (lines between --- markers, excluding the markers)
 _get_frontmatter() {
@@ -1057,7 +1055,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() trunc_list=() vestigial_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() trunc_list=() vestigial_list=() junk_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -1121,6 +1119,13 @@ _cmd_doctor_check() {
     if _has_vestigial_tag "$f"; then
       vestigial_list+=("$fname")
     fi
+
+    # Check 9: E2E 汙染 slug 偵測（warning only，不影響 exit；B5）
+    local slug="${base#?????}"
+    case "$slug" in
+      test|edge|gateway|alpha|beta|offline|nosync|common|omlx|t1)
+        junk_list+=("$fname") ;;
+    esac
   done
 
   # Check 3: duplicate IDs
@@ -1186,6 +1191,12 @@ _cmd_doctor_check() {
     printf '  %s\n' "${vestigial_list[@]}"
   fi
 
+  # Check 9 報告：warning 不影響 has_issues / exit code（B5）
+  if [[ ${#junk_list[@]} -gt 0 ]]; then
+    echo "⚠ 疑似 E2E 測試 junk（${#junk_list[@]} files，warning only）:"
+    printf '  %s\n' "${junk_list[@]}"
+  fi
+
   # Summary
   if [[ "$has_issues" == "false" ]]; then
     echo "doctor: all clear ($files_checked files checked)"
@@ -1200,7 +1211,7 @@ _cmd_doctor_check() {
 
 _cmd_doctor_fix() {
   # Repair mode: auto-fix categories 1-2
-  local fixed_wrapped=0 fixed_mismatch=0 fixed_tags=0 repair_errors=0
+  local fixed_wrapped=0 fixed_mismatch=0 fixed_tags=0 repair_errors=0 repaired_files=()
 
   # Scan all fix files
   for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
@@ -1215,6 +1226,7 @@ _cmd_doctor_fix() {
     if _is_wrapped_frontmatter "$f"; then
       if _repair_wrapped_fm "$f" "$id"; then
         fixed_wrapped=$((fixed_wrapped+1))
+        repaired_files+=("$f")
         is_wrapped=true
       else
         repair_errors=$((repair_errors+1))
@@ -1226,7 +1238,7 @@ _cmd_doctor_fix() {
       local fm_id
       fm_id=$(_normalize_id "$(_extract_fm_id "$f")")
       if [[ "$fm_id" != "$id" ]]; then
-        sed -i '' "s/^id:[[:space:]]*[0-9]*/id: $id/" "$f" && fixed_mismatch=$((fixed_mismatch+1)) || repair_errors=$((repair_errors+1))
+        sed -i '' "s/^id:[[:space:]]*[0-9]*/id: $id/" "$f" && { fixed_mismatch=$((fixed_mismatch+1)); repaired_files+=("$f"); } || repair_errors=$((repair_errors+1))
       fi
     fi
 
@@ -1236,6 +1248,7 @@ _cmd_doctor_fix() {
       strip_out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/fxmeta.py" strip_tags "$f" "auto,shadow" --no-dry 2>&1)
       if [[ $? -eq 0 ]]; then
         fixed_tags=$((fixed_tags+1))
+        repaired_files+=("$f")
       else
         echo "doctor: strip_tags failed on $f: $strip_out" >&2
         repair_errors=$((repair_errors+1))
@@ -1246,6 +1259,9 @@ _cmd_doctor_fix() {
   # Report results
   if [[ $repair_errors -eq 0 ]]; then
     echo "doctor: repaired $fixed_wrapped wrapped frontmatter, $fixed_mismatch id mismatches, $fixed_tags vestigial tags"
+    if [[ ${#repaired_files[@]} -gt 0 ]]; then
+      sync_push "${repaired_files[@]}"
+    fi
     # Re-run check to confirm
     _cmd_doctor_check
   else
@@ -1259,8 +1275,15 @@ cmd_supersede() {
   local old_f new_f
   old_f=$(resolve_id "$1")
   new_f=$(resolve_id "$2")
-  # mark old as superseded (only touch frontmatter status line)
-  sed -i.bak -E "s/^status:[[:space:]]*.*/status: superseded/" "$old_f"
+  # mark old as superseded + 補 superseded_by（否則 lint 報「superseded 但皆空」假陽性）
+  local old_id
+  old_id=$(basename "$old_f" | cut -d- -f1)
+  awk -v oid="$old_id" '
+    /^status:/ && !done_status { print "status: superseded"; print "superseded_by: " oid; done_status=1; next }
+    /^status:/ { print; next }
+    /^superseded_by:/ { print "superseded_by: " oid; next }
+    { print }
+  ' "$old_f" > "${old_f}.tmp" && mv "${old_f}.tmp" "$old_f"
   rm -f "${old_f}.bak"
   # append supersedes ref to new file frontmatter if not present
   awk -v old_id="$(basename "$old_f" | cut -d- -f1)" '
@@ -1268,6 +1291,7 @@ cmd_supersede() {
     { print }
   ' "$new_f" > "${new_f}.tmp" && mv "${new_f}.tmp" "$new_f"
   cmd_re_index
+  sync_push "$old_f" "$new_f" "$INDEX_FILE"
 }
 
 cmd_auto() {
@@ -1281,14 +1305,15 @@ cmd_auto() {
   if [[ ! -f "$fxauto" ]]; then
     die "fxauto.py not found next to fixindex: $fxauto"
   fi
-  local title="" symptom="" fix="" tags="" has_title=0 has_symptom=0 has_fix=0 has_tags=0
+  local title="" symptom="" fix="" tags="" has_title=0 has_symptom=0 has_fix=0 has_tags=0 shadow=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --title)   title="$2"; has_title=1; shift 2 ;;
       --symptom) symptom="$2"; has_symptom=1; shift 2 ;;
       --fix)     fix="$2"; has_fix=1; shift 2 ;;
       --tags)    tags="$2"; has_tags=1; shift 2 ;;
-      --commit|--shadow) shift ;;
+      --commit) shift ;;
+      --shadow) shadow=1; shift ;;
       -h|--help) cat <<'EOF'
 fixindex auto — capture ONE experience from stdin/flags (dedup → supersede → index)
 
@@ -1320,16 +1345,17 @@ EOF
   [[ $has_tags -eq 1 ]] && rxargs+=(--tags "$tags")
   # D2: flags 齊時不再提前 return 跳過 stdin —— 一律透傳 stdin 給 fxauto.py
   # （KEY 行補欄位、非 KEY 行進 §5 詳情）。tty 下 stdin 無料 → body 空 → flags-only。
-  local body=""
+  local body="" mode="--commit"
+  [[ "$shadow" == "1" ]] && mode="--shadow"
   if [[ ! -t 0 ]]; then
     body=$(cat)
   fi
   if [[ -n "$body" ]]; then
-    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" ${rxargs[@]+"${rxargs[@]}"} --commit <<EOF
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" ${rxargs[@]+"${rxargs[@]}"} $mode <<EOF
 $body
 EOF
   else
-    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" ${rxargs[@]+"${rxargs[@]}"} --commit
+    FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" ${rxargs[@]+"${rxargs[@]}"} $mode
   fi
 }
 
@@ -1373,16 +1399,19 @@ _cmd_status_fxstatus() {
 }
 
 main() {
-  # 逃生門：--no-sync 在 arg list 任意位置剝除 → FIXINDEX_NO_SYNC=1
+  # 逃生門：--no-sync 在 arg list 任意位置剝除 → export 給整棵處理樹（fxauto 也會讀），集中判斷。
   local args=() a
   for a in "$@"; do
     if [[ "$a" == "--no-sync" ]]; then
-      FIXINDEX_NO_SYNC=1
+      export FIXINDEX_NO_SYNC=1
     else
       args+=("$a")
     fi
   done
   set -- "${args[@]}"
+  # 深度守衛：最外層命令設 1 並 export；fxauto 反呼的內層 re-index/supersede 由
+  # fxsync.child_env() 升到 ≥2 → 自動啞（消除雙 commit，不靠各處手動傳 flag）。
+  export FIXINDEX_SYNC_DEPTH=1
   local sub="${1:-help}"
   shift || true
   case "$sub" in
@@ -1391,13 +1420,13 @@ main() {
     grep)      sync_pull_soft; cmd_grep "$@" ;;
     show)      sync_pull_soft; cmd_show "$@" ;;
     list)      sync_pull_soft; cmd_list ;;
-    new)       warn_if_default_dir; sync_pull; cmd_new "$@"; sync_push ;;
-    doctor)    warn_if_default_dir; sync_pull; cmd_doctor "$@"; sync_push ;;
+    new)       warn_if_default_dir; sync_pull; cmd_new "$@" ;;
+    doctor)    warn_if_default_dir; sync_pull; cmd_doctor "$@" ;;
     status)    warn_if_default_dir; _cmd_status_fxstatus "$@" ;;
-    re-index)  warn_if_default_dir; sync_pull; cmd_re_index; sync_push ;;
-    supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@"; sync_push ;;
-    fi)        warn_if_default_dir; cmd_fi "$@" ;;
-    auto)      warn_if_default_dir; cmd_auto "$@" ;;
+    re-index)  warn_if_default_dir; sync_pull; cmd_re_index; sync_push "$INDEX_FILE" ;;
+    supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@" ;;
+    fi)        warn_if_default_dir; sync_pull; cmd_fi "$@" ;;
+    auto)      warn_if_default_dir; sync_pull; cmd_auto "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $sub (try 'fixindex help')" ;;
   esac

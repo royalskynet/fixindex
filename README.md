@@ -253,6 +253,31 @@ fixindex auto \
 
 ---
 
+## 同步層（git autosync）
+
+寫入命令（`new` / `fi` / `auto` / `re-index` / `supersede` / `doctor --fix`）都是「**先 pull、結尾 commit+push**」的原子落盤：寫入即推送到 remote，壞了可回朔。所有 git 邏輯收斂在 `fxsync.py`（單一同步權威），bash、`fxauto.py`、`fxstatus.py` 都只呼叫它，不各自跑 git。
+
+- **paths-scoped commit**：只 stage 本次命令自己寫過的檔案，不 `add -A`。並發工作各自提交，不會把別人的半成品一起推上去。路徑列不出來就印警告跳過，不掃全庫。
+- **雙 commit 防堵**：`FIXINDEX_SYNC_DEPTH` 深度守衛。最外層命令設 `1`；`fxauto.py` 反呼內層 `re-index`/`supersede` subprocess 時 `child_env()` 遞增到 `≥2` → 該層 `pull`/`push` 自動啞。一次 fixture 只產生 1 個 commit（修復前是 2）。
+- **逃生門**：`--no-sync`（或環境 `FIXINDEX_NO_SYNC=1`）在 arg list 任意位置剝除並 `export`，整棵處理樹（含 fxauto）集中停用同步。
+- **離線分級（不靜默、也不假死）**：push 依 git stderr 分類 —— `offline`（網路不通）→ 不 die：本地 commit 保留，寫 `$root/.git/fixindex-pending-push` marker，印 WARNING 後 exit 0；`conflict` / `fatal` → die 並帶 git 真實 stderr 前 300 字。離線期間 `fixindex status` 一定 FAIL（`pending_push`），網路恢復後**下次任何寫入命令的 pull 前自動補推**（`flush_pending`）並移除 marker。逃生命令 `python3 fxsync.py flush`。
+
+### 狀態與閘門
+
+`fixindex status` 三段：`① index`（FIX-INDEX stale）· `② sync`（ahead/behind/dirty/離線積壓）· `③ lint`（superseded 兩欄空）。`--json` 給單行 JSON（含 `sections.sync.pending_push`）；`--assert-clean` 語意 = **errors 或 `pending_push` 存在 → exit 1**（供 Stop hook 閘門 / CI），把「commit 完沒推就宣告完成」物理擋下。
+
+### 測試隔離（必讀：跑任何測試前先設這個）
+
+測試寫入**必須**與真實 runbook 隔離，否則會重演「E2E 靜默寫入 LOG 並 push」事件。三個相關環境變數：
+
+| 變數 | 語意 | 預設 |
+|---|---|---|
+| `FIXINDEX_STRICT_DIR=1` | 測試模式開關。`FIXINDEX_DIR` 未顯式設定 → 拒絕一切回退（exit 1），杜絕「忘了設路徑就靜默寫進真庫」。`fxindex`（bash inline）、`fxstatus.py`、`fxauto.py`（`fxsync.strict_dir_guard`）三處都查 | 未設（不開） |
+| `FIXINDEX_TEST=1` | 與 `FIXINDEX_STRICT_DIR` 共同構成**測試模式**，觸發 remote 保護（下方的最後一道） | 未設 |
+| `FIXINDEX_PROTECTED_REMOTES` | 逗號分隔的 remote URL 子字串名單；測試模式下命中即拒寫（`fatal`） | `royalskynet/fixindex-log`（`fxsync.PROTECTED_REMOTES_DEFAULT`） |
+
+**規則：跑任何 fixindex 測試（e2e / 驗收 / 手動 sandbox）必先 `export FIXINDEX_STRICT_DIR=1`**，並用 `FIXINDEX_DIR`/`FIXINDEX_INDEX` 指到 sandbox（如 `/tmp/.../work/fixes`）。測試模式 + 受保護 remote = 最後一道防線，就算路徑算錯也打不進 LOG。sandbox 範例見 `e2e.py`（repo 根）。
+
 ## 可移植性（為什麼「clone 到哪都能跑」）
 
 - `fixindex` CLI 用 `$PWD/fixes` 當預設，repo 內可直接驗證。

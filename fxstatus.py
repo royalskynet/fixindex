@@ -16,73 +16,36 @@ Usage:
 """
 import json
 import os
-import re
-import subprocess
 import sys
 from pathlib import Path
 
-
-def run(cmd, cwd=None):
-    try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
-        return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
-    except Exception as e:
-        return -1, "", str(e)
+import fxsync
+import fxmeta
 
 
 def zshenv_val(key):
+    prefix = f"export {key}="
     try:
         for line in Path(os.path.expanduser("~/.zshenv")).read_text(encoding="utf-8").splitlines():
-            m = re.match(rf"^export\s+{key}=(.+)$", line.strip())
-            if m:
-                return m.group(1).strip().strip('"').strip("'")
+            line = line.strip()
+            if line.startswith(prefix):
+                return line[len(prefix):].strip().strip('"').strip("'")
     except Exception:
         pass
     return None
 
 
 def resolve_dirs():
-    fixdir = os.environ.get("FIXINDEX_DIR") or zshenv_val("FIXINDEX_DIR")
+    fixdir_env = os.environ.get("FIXINDEX_DIR")
+    # B2: STRICT_DIR=1 且未顯式設定 → 禁止一切回退（含 zshenv 與 cwd）
+    if fxsync.strict_dir_guard(fixdir_env):
+        sys.stderr.write("fixindex: STRICT_DIR: FIXINDEX_DIR 未顯式設定，拒絕回退\n")
+        sys.exit(1)
+    fixdir = fixdir_env or zshenv_val("FIXINDEX_DIR")
     index = os.environ.get("FIXINDEX_INDEX") or zshenv_val("FIXINDEX_INDEX")
     fixdir = fixdir or str(Path.cwd() / "fixes")
     index = index or str(Path.cwd() / "FIX-INDEX.md")
     return Path(os.path.expanduser(fixdir)), Path(os.path.expanduser(index))
-
-
-def git_state(fixdir):
-    """回傳 (ok, dict) — ok=False 代表非 git repo（error）。"""
-    rc, top, _ = run(["git", "-C", str(fixdir), "rev-parse", "--show-toplevel"])
-    if rc != 0 or not top:
-        return False, {"error": "not-a-git-repo"}
-    s = {"root": top, "branch": None, "ahead": 0, "behind": 0, "upstream": False,
-         "detached": False, "dirty_files": 0, "errors": [], "warnings": []}
-    rc, branch, _ = run(["git", "-C", top, "symbolic-ref", "--short", "-q", "HEAD"])
-    if rc != 0 or not branch:
-        s["detached"] = True
-        s["warnings"].append("detached HEAD（不可查 upstream 狀態）")
-        return True, s
-    s["branch"] = branch
-    rc, up, _ = run(["git", "-C", top, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-    if rc != 0 or not up:
-        s["warnings"].append(f"no upstream（branch '{branch}' 無遠端追蹤）")
-        return True, s
-    s["upstream"] = up
-    rc, ahead, _ = run(["git", "-C", top, "rev-list", "--count", "@{u}..HEAD"])
-    rc2, behind, _ = run(["git", "-C", top, "rev-list", "--count", "HEAD..@{u}"])
-    try:
-        s["ahead"] = int(ahead or 0)
-        s["behind"] = int(behind or 0)
-    except ValueError:
-        pass
-    if s["ahead"] > 0:
-        s["errors"].append(f"{s['ahead']} unpushed commit(s)（[ahead {s['ahead']}]）")
-    if s["behind"] > 0:
-        s["errors"].append(f"{s['behind']} remote commit(s) not pulled（[behind {s['behind']}]）")
-    rc, porc, _ = run(["git", "-C", top, "status", "--porcelain"])
-    s["dirty_files"] = len([l for l in porc.splitlines() if l.strip()]) if rc == 0 else 0
-    if s["dirty_files"] > 0:
-        s["warnings"].append(f"{s['dirty_files']} dirty file(s)（未 commit 的工作樹）")
-    return True, s
 
 
 def index_state(fixdir, index):
@@ -110,39 +73,49 @@ def index_state(fixdir, index):
 
 
 def lint_state(fixdir):
+    """③ lint：superseded 但 supersedes 兩欄皆空 → error（0452 形態）。
+    解析統一走 fxmeta（不重造 regex；supersedes 單值/block 都吃）。"""
     s = {"errors": []}
     if not fixdir.is_dir():
         return s
     for f in sorted(fixdir.glob("[0-9][0-9][0-9][0-9]-*.md")):
         text = f.read_text(encoding="utf-8", errors="replace")
-        m_status = re.search(r"^status:\s*(\S+)", text, re.M)
-        m_sup = re.search(r"^supersedes:\s*(\S*)", text, re.M)
-        m_by = re.search(r"^superseded_by:\s*(\S+)", text, re.M)
-        if m_status and m_status.group(1) == "superseded":
-            sup = (m_sup.group(1) if m_sup else "").strip().strip("[]'\"")
-            by = (m_by.group(1) if m_by else "").strip().strip("[]'\"")
-            # 被取代的 stub（空殼佔位）用 superseded_by 表達「被誰取代」——合法。
-            # supersedes 語意是「本條目取代了誰」；只有兩欄都空才是真異常。
-            if not sup and not by:
-                s["errors"].append(f"{f.name}: status=superseded 但 supersedes 與 superseded_by 皆空")
+        fm, _ = fxmeta.parse_frontmatter_full(text)
+        status = str(fm.get("status") or "").strip().strip('"\'')
+        supersedes = fm.get("supersedes") or []
+        if isinstance(supersedes, str):
+            supersedes = [supersedes] if supersedes.strip() else []
+        superseded_by = str(fm.get("superseded_by") or "").strip().strip('"\'')
+        # 被取代的 stub（空殼佔位）用 superseded_by 表達「被誰取代」——合法。
+        # supersedes 語意是「本條目取代了誰」；只有兩欄都空才是真異常。
+        if status == "superseded" and not supersedes and not superseded_by:
+            s["errors"].append(f"{f.name}: status=superseded 但 supersedes 與 superseded_by 皆空")
     return s
 
 
-def report(sections, json_out=False):
+def report(sections, json_out=False, assert_clean=False):
+    """三段輸出。fail = errors 或 pending_push（離線積壓）存在。
+    --assert-clean：fail → exit 1（供 stop hook 閘門 / CI）。"""
     errors = [e for sec in sections.values() for e in sec.get("errors", [])]
     warnings = [w for sec in sections.values() for w in sec.get("warnings", [])]
+    pending = [sec.get("pending_push") for sec in sections.values() if sec.get("pending_push")]
+    fail = bool(errors) or bool(pending)
     if json_out:
-        payload = {"ok": not errors, "errors": errors, "warnings": warnings, "sections": {}}
+        payload = {"ok": not fail, "errors": errors, "warnings": warnings, "sections": {}}
         for name, sec in sections.items():
-            payload["sections"][name] = {k: v for k, v in sec.items() if k not in ("errors", "warnings")}
+            sec_out = {k: v for k, v in sec.items() if k not in ("errors", "warnings")}
+            if "pending_push" in sec_out and sec_out["pending_push"] is None:
+                sec_out["pending_push"] = None  # 保留 key，machine 端可讀為「無積壓」
+            payload["sections"][name] = sec_out
         print(json.dumps(payload, ensure_ascii=False))
-        return 0 if not errors else 1
+        return 0 if not fail else 1
 
     names = {"index": "① index", "sync": "② sync", "lint": "③ lint"}
     for name, sec in sections.items():
         label = names.get(name, name)
         detail = [f"{k}={v}" for k, v in sec.items()
-                  if k not in ("errors", "warnings", "root") and isinstance(v, (str, int, bool))]
+                  if k not in ("errors", "warnings", "root", "pending_push")
+                  and isinstance(v, (str, int, bool))]
         if sec.get("root"):
             detail.append(f"root={sec['root']}")
         line = f"{label} : {' '.join(detail) if detail else '—'}"
@@ -151,11 +124,15 @@ def report(sections, json_out=False):
             print(f"    ERROR   {e}")
         for w in sec.get("warnings", []):
             print(f"    WARNING {w}")
-    if errors:
+        pp = sec.get("pending_push")
+        if pp:
+            sha = (pp.get("sha") or "?")[:7]
+            print(f"    PENDING 離線積壓 push {sha}@{pp.get('since') or '?'}（網路恢復後下次寫入自動補推）")
+    if fail:
         print(f"fixindex status: {len(errors)} error(s) — FAIL")
     else:
         print("fixindex status: OK")
-    return 0 if not errors else 1
+    return 0 if not fail else 1
 
 
 def main():
@@ -169,13 +146,10 @@ def main():
     fixdir, index = resolve_dirs()
     sections = {}
     sections["index"] = index_state(fixdir, index)
-    git_ok, gs = git_state(fixdir)
-    if not git_ok:
-        gs = {**gs, "errors": ["not a git repo（狀態不可查詢）"]}
-    sections["sync"] = gs
+    sections["sync"] = fxsync.state(fixdir)
     sections["lint"] = lint_state(fixdir)
 
-    code = report(sections, json_out=json_out)
+    code = report(sections, json_out=json_out, assert_clean=assert_clean)
     return code
 
 
