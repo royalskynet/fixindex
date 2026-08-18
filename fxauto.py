@@ -20,6 +20,15 @@ FIXINDEX_DIR = os.environ.get('FIXINDEX_DIR',
 OVERLAP_THRESHOLD = 0.6
 
 
+def _q(s):
+    """統一 YAML quoting：一律經 fxmeta 的 quote/needs_quote，不手拼引號。
+
+    防 YAML 特殊字元（`: `、`#`、`,`、引號、反斜線）破壞 frontmatter 純量欄位與
+    block list item（0454/0458 教訓：三套寫檔實作格式互打、無跳脫 → 壞檔）。"""
+    s = str(s)
+    return fxmeta._yaml_quote(s) if fxmeta._needs_yaml_quotes(s) else s
+
+
 def next_id():
     files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
     if not files:
@@ -92,31 +101,81 @@ def find_domain_file_auto(title, symps, etype='defect'):
     return None
 
 
+def _derive_title(text, limit=60):
+    """從首個 symptom 推標題：在子句邊界（；;，,、（(【—）找 ≤limit 的最長切點；
+    找不到邊界才退回硬切，並一律補 `…`（讓截斷肉眼可辨，也給 doctor 正向指紋）。"""
+    text = str(text).strip()
+    if not text:
+        return 'untitled'
+    if len(text) <= limit:
+        return text
+    # 候選邊界集合（由窄到寬的斷句符）
+    cuts = '；;，,、（(【—'
+    # 找 ≤limit 的最長切點：從后往前掃，取第一個出現在邊界集合的位置
+    best = -1
+    for i in range(limit - 1, -1, -1):
+        if text[i] in cuts:
+            best = i
+            break
+    if best >= 0:
+        return text[:best + 1].rstrip()
+    # 無邊界 → 硬切補 …
+    return text[:limit] + '…'
+
+
 def _merge_symptoms(path, new_symps):
-    """Append missing symptoms into the file's frontmatter symptoms: list."""
+    """Append missing symptoms into the file's frontmatter symptoms: list.
+
+    整段置換（非改首行）：只在 frontmatter 區間內操作，吞 flow + block 兩型既有
+    項目（hybrid 壞檔正是兩型並存），合併新症狀後以 block list 重寫。flow 內文用
+    yaml.safe_load 切分，不用裸 `,`（避免 0001 那種一句被逗號切兩筆的斷句錯誤，
+    0454 教訓）。找不到 symptoms: 就 return 不回滾（body 已先 append）。
+    """
+    import yaml as _yaml
     with open(path) as f:
         lines = f.readlines()
-    idx, existing = None, []
-    for i, ln in enumerate(lines):
-        m = re.match(r'^symptoms:[ \t]*(.*)$', ln)
-        if m:
-            idx = i
-            val = m.group(1).strip()
-            if val.startswith('[') and val.endswith(']'):
-                inner = val[1:-1]
-                existing = [x.strip().strip('"\'') for x in inner.split(',') if x.strip()]
+    # 找 frontmatter 邊界：第一個 --- 到第二個 ---，只在區間內操作
+    starts = [i for i, ln in enumerate(lines) if ln.strip() == '---']
+    if len(starts) < 2:
+        return
+    a, b = starts[0], starts[1]
+    # 找 symptoms: 起始行
+    start = None
+    for i in range(a + 1, b):
+        if re.match(r'^symptoms:', lines[i]):
+            start = i
             break
-    if idx is None:
+    if start is None:
         return
-    added = 0
-    for s in new_symps:
-        s = s.strip()
-        if s and s not in existing:
-            existing.append(s)
-            added += 1
-    if added == 0:
-        return
-    lines[idx] = 'symptoms: [' + ', '.join(existing) + ']\n'
+    headval = lines[start].split(':', 1)[1].strip()
+    existing = []
+    # flow 內容：先用 yaml 切（退化才用逗號）
+    if headval.startswith('[') and headval.endswith(']'):
+        inner = headval[1:-1]
+        if inner.strip():
+            try:
+                existing = [str(x).strip() for x in _yaml.safe_load('[' + inner + ']')]
+            except Exception:
+                existing = [x.strip().strip('"\'') for x in inner.split(',') if x.strip()]
+    # block items 一律從 symptoms: 下一行開始掃（純 block 或 hybrid 都吃得到）
+    idx = start + 1
+    while idx < b:
+        li = re.match(r'^\s*-\s+(.*)$', lines[idx])
+        if not li:
+            break
+        existing.append(li.group(1).strip().strip('"\''))
+        idx += 1
+    end = idx
+    # 去重保序（比對 strip 後值）
+    seen = {}
+    merged = []
+    for v in list(existing) + [s.strip() for s in new_symps]:
+        k = v.strip()
+        if k and k not in seen:
+            seen[k] = True
+            merged.append(v)
+    # 整段置換為 block list（一律 block，格式定於一尊）
+    lines[start:end] = ['symptoms:\n'] + [f'  - {_q(s)}\n' for s in merged]
     with open(path, 'w') as f:
         f.writelines(lines)
 
@@ -150,6 +209,7 @@ def _append_to_file(path, title, symps, root, fix, verify, detail=''):
     with open(path, 'a') as f:
         f.write('\n' + '\n'.join(lines) + '\n')
     _merge_symptoms(path, symps)
+    _verify_written(path, snap=snap)   # 2d: append 後立即驗合併後 frontmatter，壞則還原快照
     return snap, n
 
 
@@ -193,14 +253,15 @@ def find_duplicate(title, etype='defect'):
 def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail=''):
     parts = []
     parts.append('---')
-    parts.append(f'id: {fid}')
-    parts.append(f'slug: {slug}')
-    parts.append(f'title: {title}')
-    tag_items = ['auto', 'shadow'] + (tags or [])
-    parts.append('tags:\n' + '\n'.join(f'  - {t}' for t in tag_items))
+    parts.append(f'id: "{fid}"')
+    parts.append(f'slug: {_q(slug)}')
+    parts.append(f'title: {_q(title)}')
+    tag_items = list(tags or [])
+    if tag_items:
+        parts.append('tags:\n' + '\n'.join(f'  - {_q(t)}' for t in tag_items))
     parts.append('symptoms:')
     for s in symptoms:
-        parts.append(f'  - {s}')
+        parts.append(f'  - {_q(s)}')
     parts.append('status: active')
     parts.append('supersedes: []')
     parts.append('related: []')
@@ -259,6 +320,36 @@ def _run_index(cmd, *args):
         return subprocess.run([script] + cmd.split(' ') + list(args), env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return subprocess.run([script] + cmd.split(' ') + list(args), env=env)
+
+
+def _verify_written(path, snap=None):
+    """寫完立刻驗 frontmatter；壞了就還原（append）或刪除（新檔）並非零退出。
+
+    硬規則：驗失敗一律在 _run_index / _git_commit_push 之前退出，壞資料不進 index、
+    不進 git（「宣告 ≠ 生效」：不能寫完就宣稱成功，要重讀磁碟驗證）。"""
+    import shutil as _sh, sys as _sys
+    try:
+        txt = open(path, encoding='utf-8').read()
+        fm, _ = fxmeta.parse_frontmatter_full(txt)
+        head = txt.split('---\n')[1]
+        yaml_lib = __import__('yaml')
+        yaml_lib.safe_load(head)
+        if not fm or not str(fm.get('id') or '').strip():
+            raise ValueError('frontmatter missing id')
+    except Exception as e:
+        if snap and os.path.exists(snap):
+            try:
+                _sh.copy(snap, path)      # append 路徑：還原快照
+            except Exception:
+                pass
+        elif os.path.exists(path):
+            try:
+                os.remove(path)           # 新檔路徑：直接刪
+            except Exception:
+                pass
+        print(json.dumps({'error': 'frontmatter_verify_failed',
+                          'file': path, 'detail': str(e)}))
+        _sys.exit(1)
 
 
 def _git_commit_push(paths):
@@ -343,15 +434,16 @@ def build_entry_insight(fid, title, context, insight, implication, revisit, slug
     body §1 Context / §2 Insight / §3 Implication / §4 Revisit-when。"""
     parts = []
     parts.append('---')
-    parts.append(f'id: {fid}')
-    parts.append(f'slug: {slug}')
+    parts.append(f'id: "{fid}"')
+    parts.append(f'slug: {_q(slug)}')
     parts.append('type: insight')
-    parts.append(f'title: {title}')
-    tag_items = ['auto', 'insight'] + (tags or [])
-    parts.append('tags:\n' + '\n'.join(f'  - {t}' for t in tag_items))
+    parts.append(f'title: {_q(title)}')
+    tag_items = ['insight'] + list(tags or [])
+    if tag_items:
+        parts.append('tags:\n' + '\n'.join(f'  - {_q(t)}' for t in tag_items))
     parts.append('symptoms:')
     for q in queries:
-        parts.append(f'  - {q}')
+        parts.append(f'  - {_q(q)}')
     parts.append('status: active')
     parts.append('supersedes: []')
     parts.append('related: []')
@@ -412,13 +504,14 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     with open(path, 'a') as f:
         f.write('\n' + '\n'.join(lines) + '\n')
     _merge_symptoms(path, queries)
+    _verify_written(path, snap=snap)   # 2d: append 後立即驗，壞則還原快照
     return snap, n
 
 
 def _pipeline_insight(ini, detail, mode, tags_arg):
     """INSIGHT: pipe 的寫入管線（shadow/dedup-supersede/domain-append/newfile，
     與 defect 管線平行；etype 全帶 insight）。QUERIES → symptoms 供未來查詢。"""
-    title = (ini.get('insight') or ini.get('context') or 'untitled')[:80]
+    title = _derive_title(ini.get('insight') or ini.get('context') or 'untitled')
     if not title.strip():
         print('INSIGHT or CONTEXT required for insight mode (provide CONTEXT: / INSIGHT:)',
               file=sys.stderr)
@@ -458,6 +551,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
         path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
         with open(path, 'w') as f:
             f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'created': path, 'dedup': True, 'supersedes': old_id}
         payload.update(_git_commit_push([path, _resolve_index_file()] + old_files))
@@ -487,6 +581,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
     path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
     with open(path, 'w') as f:
         f.write(entry)
+    _verify_written(path)   # 2d: 寫完即驗
     _run_index('re-index')
     payload = {'created': path, 'dedup': False}
     payload.update(_git_commit_push([path, _resolve_index_file()]))
@@ -603,7 +698,9 @@ def main():
     else:
         tags = []
 
-    title = (title_override or symps[0])[:80]
+    # title_override 存在（呼叫端已明示意圖）→ 原樣採用不截斷；否則從首個
+    # symptom 走 _derive_title（子句邊界切、找不到補 …，不再硬切 80）
+    title = title_override if title_override else _derive_title(symps[0] if symps else 'untitled')
     dup = find_duplicate(title)
 
     if mode == '--shadow':
@@ -628,6 +725,7 @@ def main():
         path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
         with open(path, 'w') as f:
             f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'created': path, 'dedup': True, 'supersedes': old_id}
         git_paths = [path, _resolve_index_file()] + old_files
@@ -656,6 +754,7 @@ def main():
         path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
         with open(path, 'w') as f:
             f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗
         _run_index('re-index')
         payload = {'created': path, 'dedup': False}
         payload.update(_git_commit_push([path, _resolve_index_file()]))

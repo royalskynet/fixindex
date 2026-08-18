@@ -302,6 +302,70 @@ def normalize_file(path, dry=True):
     return {'file': os.path.basename(path), 'changed': False}
 
 
+def strip_tags(path, drop, dry=True):
+    """從 frontmatter tags 移除 vestigial tag（drop: 集合）。
+
+    只動 tags 區段（掃 frontmatter 內 tags 行 + 其後 block items 置換），其餘行
+    （其他 frontmatter 欄位、body）原樣保留 —— 滿足 doctor --fix 後
+    `git diff --stat` 只有 tags 行變動的驗收。新 items 用 _yaml_quote 正確 quoting。
+    """
+    drop = set(drop or [])
+    txt = read_file(path)
+    lines = txt.split('\n')
+    # 找 frontmatter 邊界
+    starts = [i for i, ln in enumerate(lines) if ln.strip() == '---']
+    if len(starts) < 2:
+        return {'file': os.path.basename(path), 'changed': False, 'dropped': []}
+    a, b = starts[0], starts[1]
+    # 找 tags 起始行
+    start = None
+    for i in range(a + 1, b):
+        if re.match(r'^tags:', lines[i]):
+            start = i
+            break
+    if start is None:
+        return {'file': os.path.basename(path), 'changed': False, 'dropped': []}
+    headval = lines[start].split(':', 1)[1].strip()
+    kept = []
+    dropped = []
+    # flow 值：拆成 items
+    if headval.startswith('[') and headval.endswith(']'):
+        inner = headval[1:-1]
+        for x in [v.strip().strip('"\'') for v in inner.split(',') if v.strip()]:
+            (dropped if x in drop else kept).append(x)
+        # flow → 若無 block items 跟隨，重新做成 block（絕不產 flow+block hybrid）
+        block_tail = False
+        idx = start + 1
+        while idx < b and re.match(r'^\s*-\s+', lines[idx]):
+            item = lines[idx].strip()[2:].strip().strip('"\'')
+            (dropped if item in drop else kept).append(item)
+            idx += 1
+            block_tail = True
+        end = idx if block_tail else start + 1
+        new_lines = ['tags:'] + [f'  - {_yaml_quote(t) if _needs_yaml_quotes(t) else t}' for t in kept]
+        if not kept:
+            new_lines = ['tags: []']
+    else:
+        # block 型：吃所有 block items
+        idx = start + 1
+        while idx < b and re.match(r'^\s*-\s+', lines[idx]):
+            item = lines[idx].strip()[2:].strip().strip('"\'')
+            (dropped if item in drop else kept).append(item)
+            idx += 1
+        end = idx
+        new_lines = ['tags:'] + [f'  - {_yaml_quote(t) if _needs_yaml_quotes(t) else t}' for t in kept]
+        if not kept:
+            new_lines = ['tags: []']
+    if not dropped:
+        return {'file': os.path.basename(path), 'changed': False, 'dropped': []}
+    new_txt = '\n'.join(lines[:start] + new_lines + lines[end:])
+    if new_txt != txt:
+        if not dry:
+            write_file(path, new_txt)
+    return {'file': os.path.basename(path), 'changed': True, 'dropped': dropped}
+
+
+
 # ── CLI ───────────────────────────────────────────────────────
 
 def main():
@@ -359,6 +423,13 @@ def main():
         else:
             r = normalize_file(path, dry=dry)
             print(json.dumps(r))
+
+    elif cmd == 'strip_tags':
+        path = sys.argv[2]
+        drop = [x.strip() for x in sys.argv[3].split(',') if x.strip()]
+        dry = '--no-dry' not in sys.argv
+        r = strip_tags(path, drop, dry=dry)
+        print(json.dumps(r))
 
     else:
         print(f"unknown command: {cmd}", file=sys.stderr)

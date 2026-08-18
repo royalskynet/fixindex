@@ -754,6 +754,30 @@ _extract_fm_title() {
   _get_frontmatter "$f" | awk '/^title:/ {sub(/^title:[[:space:]]*/,""); gsub(/^"/,""); gsub(/"$/,""); print; exit}'
 }
 
+# Detect vestigial tags (auto/shadow) in frontmatter tags — flow and block forms
+_has_vestigial_tag() {
+  local f="$1"
+  local fm
+  fm=$(_get_frontmatter "$f")
+  # block form: - auto / - shadow (精確整行，避免 auto-decomposer 誤判)
+  if printf '%s\n' "$fm" | grep -qE '^[[:space:]]*-[[:space:]]*(auto|shadow)[[:space:]]*$'; then
+    return 0
+  fi
+  # flow form: tags: [a, auto, b] — python 精確拆元素比對（子字串會誤報 auto-goal 等）
+  if printf '%s\n' "$fm" | python3 -c '
+import sys, re
+fm = sys.stdin.read()
+m = re.search(r"^tags:[ \t]*\[(.*?)\]", fm, re.M)
+if not m:
+    sys.exit(1)
+items = [x.strip().strip(chr(34) + chr(39)) for x in m.group(1).split(",") if x.strip()]
+sys.exit(0 if ("auto" in items or "shadow" in items) else 1)
+'; then
+    return 0
+  fi
+  return 1
+}
+
 # Repair wrapped frontmatter: flatten memory-node schema back to fixindex schema
 _repair_wrapped_fm() {
   local f="$1" id="$2"
@@ -866,10 +890,16 @@ for k, v in fields.items():
         continue
 
     # Check if this looks like a YAML array (lines starting with -)
-    if k in ['tags', 'symptoms', 'related', 'supersedes'] and any(line.startswith('-') for line in val_lines):
-        # Convert YAML array items to flow format: [item1, item2]
-        items = [line.lstrip('- ').strip().strip('"\'') for line in val_lines if line.startswith('-')]
-        cleaned_fields[k] = '[' + ', '.join(items) + ']' if items else '[]'
+    if k in ['tags', 'symptoms', 'related', 'supersedes']:
+        # 一律 block list（與 fxmeta 一致）；flow 輸入也拆成 block
+        items = []
+        for ln in val_lines:
+            s = ln.strip()
+            if s.startswith('-'):
+                items.append(s.lstrip('- ').strip().strip('"\''))
+            elif s:
+                items.extend(x.strip().strip('"\'') for x in s.split(',') if x.strip())
+        cleaned_fields[k] = items
     elif val_lines:
         # Single-value field
         cleaned_fields[k] = val_lines[0] if len(val_lines) == 1 else '\n'.join(val_lines)
@@ -898,7 +928,7 @@ for field in standard_fields:
         if field == 'id':
             final_fields[field] = expected_id
         elif field == 'status':
-            final_fields[field] = 'open'
+            final_fields[field] = 'active'
         else:
             final_fields[field] = '[]' if field in ['tags', 'symptoms', 'related', 'supersedes'] else 'TODO'
 
@@ -906,7 +936,14 @@ for field in standard_fields:
 new_fm = ['---']
 for field in standard_fields:
     if field in final_fields:
-        new_fm.append(f"{field}: {final_fields[field]}")
+        v = final_fields[field]
+        if isinstance(v, list):
+            # block list（與 fxmeta 一致
+            new_fm.append(f"{field}:")
+            for item in v:
+                new_fm.append(f"  - {item}")
+        else:
+            new_fm.append(f"{field}: {v}")
 new_fm.append('---')
 
 # Write file
@@ -974,7 +1011,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() trunc_list=() vestigial_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -1024,6 +1061,19 @@ _cmd_doctor_check() {
       if [[ "$nsections" -eq 0 ]]; then
         missing_list+=("$fname")
       fi
+    fi
+
+    # Check 7: 截斷 title（≥78 字且結尾不是 …/。/）—— 報告用，不自動修
+    if [[ -n "$title" && "$title" != "TODO" && ${#title} -ge 78 ]]; then
+      local tlast="${title: -1}"
+      if [[ "$tlast" != "…" && "$tlast" != "。" && "$tlast" != ")" ]]; then
+        trunc_list+=("$fname (${#title} chars: ${title:0:40}…)")
+      fi
+    fi
+
+    # Check 8: vestigial tag（tags 含 auto/shadow）—— 可自動修
+    if _has_vestigial_tag "$f"; then
+      vestigial_list+=("$fname")
     fi
   done
 
@@ -1078,21 +1128,33 @@ _cmd_doctor_check() {
     printf '  %s\n' "${missing_list[@]}"
   fi
 
+  if [[ ${#trunc_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "truncated titles (${#trunc_list[@]} files, report only):"
+    printf '  %s\n' "${trunc_list[@]}"
+  fi
+
+  if [[ ${#vestigial_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "vestigial tags (${#vestigial_list[@]} files, auto-fixable):"
+    printf '  %s\n' "${vestigial_list[@]}"
+  fi
+
   # Summary
   if [[ "$has_issues" == "false" ]]; then
     echo "doctor: all clear ($files_checked files checked)"
     return 0
   else
-    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]} + ${#missing_list[@]}))
+    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]} + ${#missing_list[@]} + ${#trunc_list[@]} + ${#vestigial_list[@]}))
     echo ""
-    echo "doctor: 6 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2)"
+    echo "doctor: 8 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2,8)"
     return 1
   fi
 }
 
 _cmd_doctor_fix() {
   # Repair mode: auto-fix categories 1-2
-  local fixed_wrapped=0 fixed_mismatch=0 repair_errors=0
+  local fixed_wrapped=0 fixed_mismatch=0 fixed_tags=0 repair_errors=0
 
   # Scan all fix files
   for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
@@ -1121,11 +1183,23 @@ _cmd_doctor_fix() {
         sed -i '' "s/^id:[[:space:]]*[0-9]*/id: $id/" "$f" && fixed_mismatch=$((fixed_mismatch+1)) || repair_errors=$((repair_errors+1))
       fi
     fi
+
+    # Repair 8: vestigial tags (auto/shadow) — 經 fxmeta strip_tags，保留 body 與非 ORDER 欄位
+    if _has_vestigial_tag "$f"; then
+      local strip_out
+      strip_out=$(python3 "$(dirname "${BASH_SOURCE[0]}")/fxmeta.py" strip_tags "$f" "auto,shadow" --no-dry 2>&1)
+      if [[ $? -eq 0 ]]; then
+        fixed_tags=$((fixed_tags+1))
+      else
+        echo "doctor: strip_tags failed on $f: $strip_out" >&2
+        repair_errors=$((repair_errors+1))
+      fi
+    fi
   done
 
   # Report results
   if [[ $repair_errors -eq 0 ]]; then
-    echo "doctor: repaired $fixed_wrapped wrapped frontmatter, $fixed_mismatch id mismatches"
+    echo "doctor: repaired $fixed_wrapped wrapped frontmatter, $fixed_mismatch id mismatches, $fixed_tags vestigial tags"
     # Re-run check to confirm
     _cmd_doctor_check
   else
