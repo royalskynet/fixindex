@@ -648,6 +648,11 @@ def main():
                 insight_fields[k] = v
             else:
                 detail_lines.append(raw)
+        elif re.match(r'^[A-Z][A-Z-]*:\s*$', st):
+            # 裸 KEY 標籤、無值（如空模板 `SYMPTOM:`/`ROOT:`/`FIX:`/`VERIFY:`）——
+            # 不是內容，跳過。否則會被掉進 detail_lines 進而誤當 symptom，
+            # append 成垃圾 §N 污染既有 entry（0437 被連續污染 §7/§8 的根因）。
+            continue
         elif st:
             detail_lines.append(raw)
     detail = '\n'.join(detail_lines)
@@ -667,7 +672,7 @@ def main():
             st = raw.strip()
             if not st:
                 continue
-            if re.match(r'^[A-Z]+\s*:\s*\S', st) and st.split(':', 1)[0].lower() in ('symptom', 'root', 'fix', 'verify'):
+            if re.match(r'^[A-Z]+\s*:', st) and st.split(':', 1)[0].lower() in ('symptom', 'root', 'fix', 'verify'):
                 continue
             fields.setdefault('symptom', st)
             break
