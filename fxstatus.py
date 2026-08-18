@@ -176,8 +176,6 @@ def main():
     sections["lint"] = lint_state(fixdir)
 
     code = report(sections, json_out=json_out)
-    if assert_clean:
-        return code
     return code
 
 
