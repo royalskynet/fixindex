@@ -145,6 +145,7 @@ Commands:
   fixindex new <slug>           scaffold next-numbered fix file
   fixindex doctor [--fix]       diagnose and repair corrupted frontmatter
   fixindex re-index             regenerate FIX-INDEX.md directory table
+  fixindex status              三段健康狀態：index 時效 / git 同步 / superseded lint（--assert-clean / --json）
   fixindex supersede <old> <new>  mark old superseded by new
   fixindex fi                 一行 pipe 記 defect/經驗（自動 dedup→append→建新→commit）
                                `printf 'SYMPTOM: …\\nFIX: …' | fixindex fi`（自由文字也行）
