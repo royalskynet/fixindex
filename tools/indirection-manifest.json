@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "note": "間接層運作狀態宣告。indirection-doctor.sh 逐條斷言；expect:pass 條目 FAIL → doctor exit 1，expect:fail 條目 PASS 也視為 FAIL（宣告的東西竟然成功了）。新增檢查項必須在此登記。",
+  "checks": [
+    { "kind": "symlink", "id": "fi-reminder", "path": "/Users/51mini/.claude/hooks/fi-reminder.sh", "expect": "pass", "detail": "claude 首頁 reminder hook 符號連結存在性" },
+    { "kind": "git_remote", "id": "MEM-origin", "repo": "/Users/51mini/.claude/projects/-Users-51mini/memory", "remote": "origin", "expect": "pass", "detail": "MEM repo origin 遠端可達" },
+    { "kind": "git_remote", "id": "FIX-origin", "repo": "/Users/51mini/dev/fixindex", "remote": "origin", "expect": "pass", "detail": "FIX repo origin 遠端可達" },
+    { "kind": "git_remote", "id": "OFT-origin-retired", "repo": "/Users/51mini/omniroute-free-tools", "remote": "origin", "expect": "fail", "detail": "repo 不存在(404)，內容已併入 harness-layer", "since": "2026-08-21" },
+    { "kind": "git_remote", "id": "OFT-hlprivate-retired", "repo": "/Users/51mini/omniroute-free-tools", "remote": "hl-private", "expect": "fail", "detail": "repo 不存在(404)，內容已併入 harness-layer", "since": "2026-08-21" },
+    { "kind": "git_hook", "id": "MEM-precommit", "repo": "/Users/51mini/.claude/projects/-Users-51mini/memory", "hook": "pre-commit", "expect": "pass", "detail": "MEM pre-commit secret-scan delegator" },
+    { "kind": "git_hook", "id": "MEM-prepush", "repo": "/Users/51mini/.claude/projects/-Users-51mini/memory", "hook": "pre-push", "expect": "pass", "detail": "MEM pre-push secret-scan delegator" },
+    { "kind": "git_hook", "id": "FIX-precommit", "repo": "/Users/51mini/dev/fixindex", "hook": "pre-commit", "expect": "pass", "detail": "FIX pre-commit secret-scan delegator" },
+    { "kind": "git_hook", "id": "FIX-prepush", "repo": "/Users/51mini/dev/fixindex", "hook": "pre-push", "expect": "pass", "detail": "FIX pre-push secret-scan delegator" },
+    { "kind": "hooks_path_unset", "id": "hooks-global", "repo": "global", "expect": "pass", "detail": "git --global core.hooksPath 應未設定" },
+    { "kind": "hooks_path_unset", "id": "hooks-MEM", "repo": "/Users/51mini/.claude/projects/-Users-51mini/memory", "expect": "pass", "detail": "MEM repo core.hooksPath 應未設定" },
+    { "kind": "hooks_path_unset", "id": "hooks-FIX", "repo": "/Users/51mini/dev/fixindex", "expect": "pass", "detail": "FIX repo core.hooksPath 應未設定" },
+    { "kind": "hooks_path_unset", "id": "hooks-OFT", "repo": "/Users/51mini/omniroute-free-tools", "expect": "pass", "detail": "OFT repo core.hooksPath 應未設定" },
+    { "kind": "md5_fanout", "id": "coding-hermes-skill", "paths": [
+        "/Users/51mini/dev/coding-hermes-skill/skills/coding-hermes/SKILL.md",
+        "/Users/51mini/.agents/skills/coding-hermes/SKILL.md",
+        "/Users/51mini/.hermes/skills/coding-hermes/SKILL.md",
+        "/Users/51mini/.hermes/profiles/mannie/skills/coding-hermes/SKILL.md"
+      ], "expect": "pass", "detail": "工單原寫 /dev/coding-hermes-skill/SKILL.md，實測為 skills/coding-hermes/ 子層級（見報告）" },
+    { "kind": "exec_exists", "id": "jq", "cmd": "jq", "expect": "pass", "detail": "jq CLI 存在" },
+    { "kind": "exec_exists", "id": "gitleaks", "cmd": "gitleaks", "expect": "pass", "detail": "gitleaks 引擎存在（secret-scan fail-closed，缺它會擋死所有 commit）" },
+    { "kind": "exec_exists", "id": "fixindex", "cmd": "/Users/51mini/.local/bin/fixindex", "expect": "pass", "detail": "fixindex CLI 存在" },
+    { "kind": "exec_exists", "id": "hermes", "cmd": "/Users/51mini/.local/bin/hermes", "expect": "pass", "detail": "hermes CLI 存在" }
+  ]
+}
