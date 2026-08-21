@@ -32,6 +32,13 @@ clarifying question and the point is lost. Write the
 root-cause formula, supporting data, paths already ruled out, and any
 portable rule — not a changelog. Record it even when the fix is not
 implemented yet: say "not fixed" and note the next step.
+**Which repo `fi` writes to:** `fixindex fi` writes to the fixes dir pointed to by
+`FIXINDEX_DIR` (fallback: the CLI repo's `fixes/`, which is gitignored — your entry
+would be silently ignored). In shell-free/scheduler contexts the env var may not be
+sourced from `.zshrc`; before recording, confirm `$FIXINDEX_DIR` resolves to your
+intended runbook (e.g. `~/notes/runbook/fixes`) or export it explicitly. Never
+`git add -f` an ignored entry — that is a signal you wrote to the wrong repo.
+
 
 The user may also use the explicit keyword `Fixindex <question>` to
 force an entry. Dispatch by intent: list / find / show / grep / new /
