@@ -29,12 +29,19 @@ if tp == '-' or not tp or not os.path.isfile(tp):
 # ---- 解析 transcript JSONL：只看 Bash tool_use 的 input.command（不看 hook 自己的 reason）----
 FI_RE = re.compile(r'\bfixindex\s+(fi|new|auto)\b')
 GIT_RE = re.compile(r'\bgit\b[^\n;|&]*\b(commit|push)\b')
+FIXES_PATH_RE = re.compile(r'/memory/fixes/[^/]+\.md$')
 DEBUG_RE = re.compile(
     r'error|錯誤|bug|fix(ed)?|修好|修復|除錯|debug|root cause|根因|崩'
     r'|crashed?|timeout|401|fail(ed)?|stack trace|重試|troubleshoot', re.I)
+# 不算「動過東西」的寫入目標：計畫／工單／報告草稿、暫存區。談論 defect 而只寫這些檔的
+# 純規劃輪，不該被當成修過 defect。Bash 的 in-place 編輯（sed -i 等）目前不計入，
+# 寧可漏抓也不要誤擋；真的改了通常伴隨 git commit，那條已由 git_commit_seen 認列。
+NON_MUTATING_PATH_RE = re.compile(r'/\.claude/plans/|/scratchpad/|^/private/tmp/|^/tmp/')
 
 fi_called = False
 git_commit_seen = False
+fixes_edited = False
+mutated = False
 debug_evidence = False
 tool_calls = 0
 
@@ -49,23 +56,32 @@ try:
             except Exception:
                 continue
             t = rec.get('type')
-            if t == 'tool_use':
-                tool_calls += 1
-                if rec.get('name') == 'Bash':
-                    inp = rec.get('input')
-                    cmd = str(inp.get('command') or '') if isinstance(inp, dict) else ''
-                    if FI_RE.search(cmd):
-                        fi_called = True
-                    if GIT_RE.search(cmd):
-                        git_commit_seen = True
-            elif t == 'assistant':
-                content = rec.get('content')
-                if isinstance(content, list):
-                    text = ' '.join(str(c.get('text') or '') for c in content if isinstance(c, dict))
-                else:
-                    text = str(content or '')
-                if DEBUG_RE.search(text):
-                    debug_evidence = True
+            msg = rec.get('message')
+            blocks = msg.get('content') if isinstance(msg, dict) else None
+            if t == 'assistant' and isinstance(blocks, list):
+                for b in blocks:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get('type') == 'tool_use':
+                        tool_calls += 1
+                        if b.get('name') == 'Bash':
+                            inp = b.get('input')
+                            cmd = str(inp.get('command') or '') if isinstance(inp, dict) else ''
+                            if FI_RE.search(cmd):
+                                fi_called = True
+                            if GIT_RE.search(cmd):
+                                git_commit_seen = True
+                                mutated = True
+                        elif b.get('name') in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
+                            inp = b.get('input')
+                            fp = str(inp.get('file_path') or '') if isinstance(inp, dict) else ''
+                            if FIXES_PATH_RE.search(fp):
+                                fixes_edited = True
+                            if fp and not NON_MUTATING_PATH_RE.search(fp):
+                                mutated = True
+                    elif b.get('type') == 'text':
+                        if DEBUG_RE.search(str(b.get('text') or '')):
+                            debug_evidence = True
 except Exception:
     pass
 
@@ -77,7 +93,7 @@ def block(reason):
 
 # ---- 閘門：有 git commit / fixindex 寫入跡象 → 事實查核 fixindex status ----
 # fixindex 不可用 / status 失敗（timeout、掛掉）→ 放行，不 block（C 搭配失敗保守放行）。
-if fi_called or git_commit_seen:
+if fi_called or git_commit_seen or fixes_edited:
     p = None
     try:
         p = subprocess.run(['fixindex', 'status', '--json', '--assert-clean'],
@@ -121,7 +137,9 @@ if tool_calls < THRESHOLD:
     sys.exit(0)
 
 # ---- 提醒：疑似修過 defect 但沒記 ----
-if debug_evidence and not fi_called:
+# 需要「談到 defect」+「真的動過檔案」兩個證據同時成立。只有文字證據時，
+# 稽核／規劃／寫工單這類純討論輪會滿篇 fix/根因/error 而被誤擋。
+if debug_evidence and mutated and not fi_called:
     block('fi-reminder: 本次疑似修過 defect，但未見 fixindex fi/new/auto 記入。'
           '補記（printf "SYMPTOM: ...\\nFIX: ..." | fixindex fi，含實測數據與無效嘗試）；'
           '若確實無 defect 可記，一句話說明後即可停。')
