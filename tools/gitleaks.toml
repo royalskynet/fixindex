@@ -1,0 +1,23 @@
+# gitleaks custom config — 本機 FIX repo secret 掃描用
+# 由 secret-scan.sh wrapper 以 --config 絕對路徑引用。
+# 繼承 gitleaks 內建規則集, 只補本機特有規則。
+
+title = "indirection-guarded gitleaks config"
+
+[extend]
+useDefault = true
+
+# NVIDIA NIM API key — 內建規則集未含, 實測確認後補這條
+[[rules]]
+id = "nvidia-nim-key"
+description = "NVIDIA NIM / API key (nvapi-*)"
+regex = '''nvapi-[A-Za-z0-9_-]{20,}'''
+keywords = ["nvapi-"]
+
+# allowlist: 樣板檔與測試 fixture 路徑, 避免自我誤報
+[[allowlists]]
+description = "fixindex templates and test fixtures"
+paths = [
+  '''fixes/.template.md''',
+  '''tools/secret-scan-test.sh''',
+]
