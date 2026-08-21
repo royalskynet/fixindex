@@ -43,10 +43,18 @@ def next_id():
     return f'{int(last) + 1:04d}'
 
 
-def slugify(text):
+def slugify(text, fallback='untitled'):
     import unicodedata
     s = unicodedata.normalize('NFKD', text.lower())
-    return re.sub(r'[^a-z0-9]+', '-', s).strip('-')[:60]
+    out = re.sub(r'[^a-z0-9]+', '-', s).strip('-')[:60]
+    if not out:
+        # 全中文/全符號 title 會塌成空字串 → 檔名變 NNNN-.md，索引與檔名都認不出內容。
+        # bash 端 slugify() 對此直接 die；python 端走 fi 管線不能中斷寫入（內容已備妥），
+        # 因此退回 fallback，並在 stderr 留痕讓呼叫者知道 slug 沒有語意。
+        print(f'fixindex: slug normalized to empty, falling back to {fallback!r} (got: {text!r})',
+              file=sys.stderr)
+        return fallback
+    return out
 
 
 def _title_tokens(text):
@@ -108,23 +116,32 @@ def find_domain_file_auto(title, symps, etype='defect'):
 
 
 def _derive_title(text, limit=60):
-    """從首個 symptom 推標題：在子句邊界（；;，,、（(【—）找 ≤limit 的最長切點；
-    找不到邊界才退回硬切，並一律補 `…`（讓截斷肉眼可辨，也給 doctor 正向指紋）。"""
+    """從首個 symptom 推標題：先找句號類終止符（。．.！？ 是最理想切點），
+    找不到才退回次級斷句符（；;，,、（(【—）；兩輪都無邊界才退回硬切，
+    並一律補 `…`（讓截斷肉眼可辨，也給 doctor 正向指紋）。"""
     text = str(text).strip()
     if not text:
         return 'untitled'
     if len(text) <= limit:
         return text
-    # 候選邊界集合（由窄到寬的斷句符）
-    cuts = '；;，,、（(【—'
-    # 找 ≤limit 的最長切點：從后往前掃，取第一個出現在邊界集合的位置
+    # 句號類是最理想的切點，必須優先；次級（頓號/逗號/括號/破折號）才是退路。
+    # 原本只有次級集合，導致標題切在句中而非句末。
+    cuts_strong = '。．.！!？?'
+    cuts_weak = '；;，,、（(【—'
+    # 第一輪：句號類，從後往前找 ≤limit 的最長切點
     best = -1
     for i in range(limit - 1, -1, -1):
-        if text[i] in cuts:
+        if text[i] in cuts_strong:
             best = i
             break
+    # 第二輪：次級斷句符（僅當第一輪沒找到）
+    if best < 0:
+        for i in range(limit - 1, -1, -1):
+            if text[i] in cuts_weak:
+                best = i
+                break
     if best >= 0:
-        return text[:best + 1].rstrip('；;，,、（(【—-–— ')
+        return text[:best + 1].rstrip('；;，,、（(【—-–—。．.！!？? ')
     # 無邊界 → 硬切補 …
     return text[:limit] + '…'
 
@@ -501,7 +518,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
     if dup:
         old_id = dup[0]
         new_id = next_id()
-        slug = slugify(title)
+        slug = slugify(title, fallback='insight')
         entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
                                     slug, queries, tags, detail)
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
@@ -533,7 +550,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
         return
 
     fid = next_id()
-    slug = slugify(title)
+    slug = slugify(title, fallback='insight')
     entry = build_entry_insight(fid, title, context, insight, impl, revisit,
                                 slug, queries, tags, detail)
     os.makedirs(FIXINDEX_DIR, exist_ok=True)
