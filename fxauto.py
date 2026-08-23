@@ -484,9 +484,13 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     return snap, n
 
 
-def _pipeline_insight(ini, detail, mode, tags_arg):
-    """INSIGHT: pipe 的寫入管線（shadow/dedup-supersede/domain-append/newfile，
-    與 defect 管線平行；etype 全帶 insight）。QUERIES → symptoms 供未來查詢。"""
+def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
+    """INSIGHT: pipe 的寫入管線（shadow / dedup-supersede / domain-append / new-file，
+    與 defect 管線平行；etype 全帶 insight）。QUERIES → symptoms 供未來查詢。
+
+    回傳 (payload, touched_paths)。defer_commit=False 時各分支結尾自行
+    payload.update(_git_commit_push(paths))——單一 commit，行為與 inline 版位元一致。
+    """
     title = _derive_title(ini.get('insight') or ini.get('context') or 'untitled')
     if not title.strip():
         print('INSIGHT or CONTEXT required for insight mode (provide CONTEXT: / INSIGHT:)',
@@ -502,7 +506,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
     tags = []
     if tags_arg:
         tags = [t.strip() for t in re.split(r'[,，\s]+', tags_arg) if t.strip()]
-    # matching symps 用 CONTEXT（對應 defect SYMPTOM 做 domain/dedup 分級）
+    # matching symps 用 CONTEXT（對應 defect 的 SYMPTOM 做 domain/dedup 分級）
     symps = [s.strip() for s in context.split(';') if s.strip()] or queries[:1]
 
     dup = find_duplicate(title, etype='insight')
@@ -512,8 +516,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
                        next_id(), title, context, insight, impl, revisit, '',
                        queries, tags).split('\n'))}
         payload['dedup'] = {'supersedes': dup[0], 'overlap': round(dup[1], 2)} if dup else None
-        print(json.dumps(payload))
-        return
+        return payload, []
 
     if dup:
         old_id = dup[0]
@@ -529,25 +532,23 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
             f.write(entry)
         _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
-        payload = {'created': path, 'dedup': True, 'supersedes': old_id}
-        payload.update(_git_commit_push([path, _resolve_index_file()] + old_files))
-        print(json.dumps(payload))
-        if payload.get('git_error'):
-            sys.exit(1)
-        return
+        payload = {'etype': 'insight', 'created': path, 'dedup': True, 'supersedes': old_id}
+        paths = [path, _resolve_index_file()] + old_files
+        if not defer_commit:
+            payload.update(_git_commit_push(paths))
+        return payload, paths
 
     match = find_domain_file_auto(title, symps, etype='insight')
     if match:
         snap, secn = _append_to_file_insight(match, title, context, insight, impl,
                                              revisit, queries, detail)
         _run_index('re-index')
-        payload = {'appended': os.path.basename(match), 'section': secn,
+        payload = {'etype': 'insight', 'appended': os.path.basename(match), 'section': secn,
                    'dedup': False, 'undo': snap}
-        payload.update(_git_commit_push([match, _resolve_index_file()]))
-        print(json.dumps(payload))
-        if payload.get('git_error'):
-            sys.exit(1)
-        return
+        paths = [match, _resolve_index_file()]
+        if not defer_commit:
+            payload.update(_git_commit_push(paths))
+        return payload, paths
 
     fid = next_id()
     slug = slugify(title, fallback='insight')
@@ -559,12 +560,93 @@ def _pipeline_insight(ini, detail, mode, tags_arg):
         f.write(entry)
     _verify_written(path)   # 2d: 寫完即驗
     _run_index('re-index')
-    payload = {'created': path, 'dedup': False}
-    payload.update(_git_commit_push([path, _resolve_index_file()]))
-    print(json.dumps(payload))
-    if payload.get('git_error'):
-        sys.exit(1)
-    return
+    payload = {'etype': 'insight', 'created': path, 'dedup': False}
+    paths = [path, _resolve_index_file()]
+    if not defer_commit:
+        payload.update(_git_commit_push(paths))
+    return payload, paths
+
+
+def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commit=False):
+    """Defect 寫入管線（shadow / dedup-supersede / domain-append / new-file），
+    抽自 main() 688-745 行。不含首行容錯推斷與 SYMPTOM required 報錯（留在 main）。
+
+    回傳 (payload, touched_paths)。defer_commit=False 時結尾自行
+    payload.update(_git_commit_push(paths))——單一 commit，行為與 inline 版位元一致。
+    """
+    sympt = fields.get('symptom', '')
+    root = fields.get('root', 'untraced')
+    fix = fields.get('fix', 'applied')
+    verify = fields.get('verify', 'verified')
+
+    symps = [s.strip() for s in sympt.split(';') if s.strip()]
+    if not symps:
+        symps = [sympt.strip()]
+
+    if tags_arg:
+        tags = [t.strip() for t in re.split(r'[,，\s]+', tags_arg) if t.strip()]
+    else:
+        tags = []
+
+    # title_override 存在（呼叫端已明示意圖）→ 原樣採用不截斷；否則從首個
+    # symptom 走 _derive_title（子句邊界切、找不到補 …，不再硬切 80）
+    title = title_override if title_override else _derive_title(symps[0] if symps else 'untitled')
+    dup = find_duplicate(title)
+
+    if mode == '--shadow':
+        payload = {'preview_lines': len(build_entry(next_id(), title, symps, root, fix, verify, '', tags).split('\n'))}
+        if dup:
+            payload['dedup'] = {'supersedes': dup[0], 'overlap': round(dup[1], 2)}
+        else:
+            payload['dedup'] = None
+        return payload, []
+
+    if dup:
+        # 去個案化：取代舊條目, 不創重複檔
+        old_id = dup[0]
+        new_id = next_id()
+        slug = slugify(title)
+        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail)
+        os.makedirs(FIXINDEX_DIR, exist_ok=True)
+        old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
+        import glob as _g
+        old_files = sorted(_g.glob(old_path))
+        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
+        with open(path, 'w') as f:
+            f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+        _run_index(f'supersede {old_id} {new_id}')
+        payload = {'created': path, 'dedup': True, 'supersedes': old_id}
+        paths = [path, _resolve_index_file()] + old_files
+        if not defer_commit:
+            payload.update(_git_commit_push(paths))
+        return payload, paths
+    else:
+        # 無重複 → 先試 domain append（分級匹配，拒猜；不中才建新檔）
+        match = find_domain_file_auto(title, symps)
+        if match:
+            snap, sec = _append_to_file(match, title, symps, root, fix, verify, detail)
+            _run_index('re-index')
+            payload = {'appended': os.path.basename(match), 'section': sec,
+                       'dedup': False, 'undo': snap}
+            paths = [match, _resolve_index_file()]
+            if not defer_commit:
+                payload.update(_git_commit_push(paths))
+            return payload, paths
+        fid = next_id()
+        slug = slugify(title)
+        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail)
+        os.makedirs(FIXINDEX_DIR, exist_ok=True)
+        path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
+        with open(path, 'w') as f:
+            f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗
+        _run_index('re-index')
+        payload = {'created': path, 'dedup': False}
+        paths = [path, _resolve_index_file()]
+        if not defer_commit:
+            payload.update(_git_commit_push(paths))
+        return payload, paths
 
 
 def main():
@@ -626,21 +708,37 @@ def main():
                 detail_lines.append(raw)
         elif re.match(r'^[A-Z][A-Z-]*:\s*$', st):
             # 裸 KEY 標籤、無值（如空模板 `SYMPTOM:`/`ROOT:`/`FIX:`/`VERIFY:`）——
-            # 不是內容，跳過。否則會被掉進 detail_lines 進而誤當 symptom，
-            # append 成垃圾 §N 污染既有 entry（0437 被連續污染 §7/§8 的根因）。
+            # 不是內容，省略。否則會被掉進 detail_lines 進而誤當 symptom，
+            # append 成垃圾 §N 污染既有 entry（0437 被連續污染的根因）。
             continue
         elif st:
             detail_lines.append(raw)
     detail = '\n'.join(detail_lines)
 
-    # --- insight 路徑：INSIGHT: key 或 TYPE: insight → 改走 insight 管線，
-    #     用 CONTEXT/INSIGHT/IMPLICATION/REVISIT-WHEN（對應 defect 的
-    #     SYMPTOM/ROOT/FIX/VERIFY）+ QUERIES（未來查詢句 → symptoms）。
-    #     etype 全帶 insight，與 defect 互不污染（insight/defect 不互相
-    #     supersede、不互相 append）。---
-    if ('insight' in insight_fields) or (insight_fields.get('type', '').strip().lower() == 'insight'):
-        return _pipeline_insight(insight_fields, detail, mode, tags_arg)
+    # --- 三態分流：判定 mixed / insight-only / defect-only ---
+    has_insight_key = ('insight' in insight_fields) or (insight_fields.get('type', '').strip().lower() == 'insight')
+    has_explicit_symptom = 'symptom' in fields
 
+    if has_insight_key and has_explicit_symptom:
+        # 混拆：defect 先寫、insight 後寫、頂層單 commit/push（無名 namespace 併同克哈希）。
+        d_payload, d_paths = _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commit=True)
+        i_payload, i_paths = _pipeline_insight(insight_fields, '', mode, tags_arg, defer_commit=True)
+        out = {'mixed': True, 'defect': d_payload, 'insight': i_payload}
+        if mode == '--commit':
+            all_paths = list(dict.fromkeys(d_paths + i_paths))
+            out.update(_git_commit_push(all_paths))
+        print(json.dumps(out, ensure_ascii=False))
+        if out.get('git_error'):
+            sys.exit(1)
+        return
+    elif has_insight_key:
+        payload, _ = _pipeline_insight(insight_fields, detail, mode, tags_arg)
+        print(json.dumps(payload, ensure_ascii=False))
+        if payload.get('git_error'):
+            sys.exit(1)
+        return
+
+    # --- 純 defect：先做首行容錯，SYMPTOM 必填 ---
     sympt = fields.get('symptom', '')
     if not sympt:
         # 自由文字容錯：無 SYMPTOM KEY 時，取首行非空、非 KEY 行當 symptom
@@ -653,9 +751,6 @@ def main():
             fields.setdefault('symptom', st)
             break
         sympt = fields.get('symptom', '')
-    root = fields.get('root', 'untraced')
-    fix = fields.get('fix', 'applied')
-    verify = fields.get('verify', 'verified')
 
     if not sympt:
         print(
@@ -669,80 +764,11 @@ def main():
         )
         sys.exit(1)
 
-    symps = [s.strip() for s in sympt.split(';') if s.strip()]
-    if not symps:
-        symps = [sympt.strip()]
-
-    # tags：--tags 透傳（逗號/空白分隔），或留 default auto/shadow
-    if tags_arg:
-        tags = [t.strip() for t in re.split(r'[,，\s]+', tags_arg) if t.strip()]
-    else:
-        tags = []
-
-    # title_override 存在（呼叫端已明示意圖）→ 原樣採用不截斷；否則從首個
-    # symptom 走 _derive_title（子句邊界切、找不到補 …，不再硬切 80）
-    title = title_override if title_override else _derive_title(symps[0] if symps else 'untitled')
-    dup = find_duplicate(title)
-
-    if mode == '--shadow':
-        payload = {'preview_lines': len(build_entry(next_id(), title, symps, root, fix, verify, '', tags).split('\n'))}
-        if dup:
-            payload['dedup'] = {'supersedes': dup[0], 'overlap': round(dup[1], 2)}
-        else:
-            payload['dedup'] = None
-        print(json.dumps(payload))
-        return
-
-    if dup:
-        # 去個案化：取代舊條目, 不創重複檔
-        old_id = dup[0]
-        new_id = next_id()
-        slug = slugify(title)
-        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail)
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
-        import glob as _g
-        old_files = sorted(_g.glob(old_path))
-        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
-        _run_index(f'supersede {old_id} {new_id}')
-        payload = {'created': path, 'dedup': True, 'supersedes': old_id}
-        git_paths = [path, _resolve_index_file()] + old_files
-        payload.update(_git_commit_push(git_paths))
-        print(json.dumps(payload))
-        if payload.get('git_error'):
-            sys.exit(1)
-        return
-    else:
-        # 無重複 → 先試 domain append（分級匹配，拒猜；不中才建新檔）
-        match = find_domain_file_auto(title, symps)
-        if match:
-            snap, secn = _append_to_file(match, title, symps, root, fix, verify, detail)
-            _run_index('re-index')
-            payload = {'appended': os.path.basename(match), 'section': secn,
-                       'dedup': False, 'undo': snap}
-            payload.update(_git_commit_push([match, _resolve_index_file()]))
-            print(json.dumps(payload))
-            if payload.get('git_error'):
-                sys.exit(1)
-            return
-        fid = next_id()
-        slug = slugify(title)
-        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail)
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗
-        _run_index('re-index')
-        payload = {'created': path, 'dedup': False}
-        payload.update(_git_commit_push([path, _resolve_index_file()]))
-        print(json.dumps(payload))
-        if payload.get('git_error'):
-            sys.exit(1)
-        return
+    payload, _ = _pipeline_defect(fields, detail, mode, tags_arg, title_override)
+    print(json.dumps(payload, ensure_ascii=False))
+    if payload.get('git_error'):
+        sys.exit(1)
+    return
 
 
 if __name__ == '__main__':

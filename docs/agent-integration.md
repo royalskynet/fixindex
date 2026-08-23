@@ -53,6 +53,21 @@ QUERIES: q1, q2' | fixindex fi
 ```
 （CONTEXT/INSIGHT/IMPLICATION/REVISIT-WHEN 對應 defect 的 SYMPTOM/ROOT/FIX/VERIFY；`QUERIES` 逗號分隔 → frontmatter `symptoms:` 供未來 `fixindex insights` 命中；insight 與 defect 各走各的 domain/dedup，互不 append、不互相 supersede。）
 
+#### 混合輸入（SYMPTOM + INSIGHT 同一 pipe）
+
+同一 pipe 同時帶 `SYMPTOM:`（含 SUB/相關 defect KEY）與 `INSIGHT:` / `TYPE: insight` → fxauto 自動拆成**兩筆**：defect 一檔 + insight 一檔，**單一 commit** 落盤。detail（非 KEY 行，即 SYMPTOM 與 KEY 之間的自由文字）只歸 defect（§5），insight 不帶，避免兩檔污染 find 排序。QUERIES 值進 insight 的 `symptoms:`。
+
+```bash
+printf 'SYMPTOM: <defect 症狀>\nROOT: <根因>\nFIX: <解法>\nVERIFY: <驗證>\n詳情只屬 defect\nINSIGHT: <已固化結論>\nIMPLICATION: <影響>\nQUERIES: <未來查詢關鍵字>\n' | fixindex fi
+```
+
+`--commit` 模式回傳單一合併 JSON（commit 欄位僅一份）：
+```json
+{"mixed": true, "defect": {"created": "...0001-defect.md", "dedup": false}, "insight": {"created": "...0002-insight.md", "dedup": false}, "committed": "abc1234", "pushed": true, "git_error": null}
+```
+
+`--shadow` 模式同樣拆兩筆 preview，但不含 commit 欄位。**行為註記**：混拆 commit 模式下若 insight 寫入驗證失敗 → defect 已落盤但未 commit（fail-loud；insight 側失誤不會回滾已寫的 defect 檔）。
+
 ---
 
 ## Mode B — Implicit natural-language triggers
@@ -128,9 +143,9 @@ Modes A and B rely on the model remembering to fire. Under load it forgets. If y
 
 | Point | Hook event | What fires |
 |---|---|---|
-| 1. Plan start — static sweep + insight pull | `PreToolUse` on `ExitPlanMode` | Auto-runs `fixindex insights "<plan title>"` and injects any hits (already-固化 design decisions worth carrying into this task); plus, if the session has run no `fixindex find` yet, a one-shot reminder: domain-level find on the plan's topic + toolchain, plus pre-query the foreseeable failure symptoms (external services, permissions, timeouts, stale state). Runs once, never nags. |
+| 1. Plan start — static sweep + insight pull | `PreToolUse` on `ExitPlanMode` | Auto-runs `fixindex insights "<plan title>"` **and `fixindex find "<plan title>"`**, injecting any hits into context before the task; plus, if the session has run no `fixindex find` yet, a one-shot reminder: domain-level find on the plan's topic + toolchain, plus pre-query the foreseeable failure symptoms (external services, permissions, timeouts, stale state). Runs once, never nags. |
 | 2. Mid-run — on-failure lookup | `PreToolUse` on `Bash`, mounted on the consecutive-failure counter | When a command fingerprint has already failed ≥1 time and the agent is about to retry, the hook itself runs `fixindex find "<last failure symptom>"` and injects the hits into context before the retry. At ≥2 failures the stop-loss notice takes over. |
-| 3. Wrap-up — fi gate | `Stop` | If the transcript looks like a debug session (≥10 tool calls + error markers) and no `fixindex fi/new/auto` was run, return `{"decision":"block"}` to force a catch-up entry (or a one-line "nothing to record"). Guard with `stop_hook_active` to prevent loops; stay silent for small tasks below the call threshold. |
+| 3. Wrap-up — fi reminder | `Stop` | If the transcript looks like a debug session (≥10 tool calls + error markers) and no `fixindex fi/new/auto` was run, post an **advisory** `[FI-REMIND]` notice (`continue: true`, non-blocking) to prompt a catch-up entry. Guard with `stop_hook_active` to prevent loops; stay silent for small tasks below the call threshold. |
 
 Properties: no failure → no trigger, so frequency is naturally bounded; mines the plan-time sweep can't see are caught the moment you step on them (point 2 covers the mid-run blind spot).
 
@@ -138,7 +153,7 @@ Reference implementation (authoritative): [`hooks/plan-path-notice.js` and `hook
 
 Two hard-won implementation notes: (a) `PostToolUse` does **not** fire when a Bash command exits non-zero and its payload has no exit code — read `is_error` from the session transcript instead; (b) time your `fixindex find` before embedding it in a hook (measured ~2.8 s) and give the subprocess timeout 1.5× headroom, or every lookup silently returns empty.
 
-三點式（中文摘要）：① plan 起點域級掃雷（一次性，含預判高機率踩雷點）② 執行期踩雷當下、重試前以上次失敗症狀自動查 fixindex ③ 完工 Stop hook 擋收尾強制補 `fi`（小任務低於呼叫數門檻則靜默）。不失敗不觸發，頻率天然有界。
+三點式（中文摘要）：① plan 起點域級掃雷（一次性，含預判高機率踩雷點）② 執行期踩雷當下、重試前以上次失敗症狀自動查 fixindex ③ 完工 Stop hook advisory 提醒補 `fi`（`[FI-REMIND]`，不阻斷；小任務低於呼叫數門檻則靜默）。不失敗不觸發，頻率天然有界。
 
 ---
 

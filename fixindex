@@ -143,6 +143,7 @@ Commands:
   fixindex supersede <old> <new>  mark old superseded by new
   fixindex fi                 一行 pipe 記 defect/經驗（自動 dedup→append→建新→commit）
                                `printf 'SYMPTOM: …\\nFIX: …' | fixindex fi`（自由文字也行）
+                               混合輸入: SYMPTOM+INSIGHT 同 pipe → 拆兩筆(defect+insight)、單一 commit
   fixindex fi <domain>        舊介面：指定 domain 直接 append（--title/--push/--new）
   fixindex auto               等同 `fixindex fi`（無參數，保留別名）
   fixindex help                 this message
@@ -575,6 +576,7 @@ fixindex fi — 一行 pipe 記 defect/經驗（自動 dedup→domain append→�
   自由文字或 KEY 行皆可，例如：
   printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …' | fixindex fi
   或 echo '一句話描述症狀' | fixindex fi
+  混合輸入: SYMPTOM+INSIGHT 同 pipe → 自動拆成 defect+insight 兩筆、單一 commit
 舊介面（指定 domain 直接 append）: fixindex fi <domain> [--title T] [--push] [--new]
 誤配/誤寫還原: git checkout -- fixes/NNNN-*.md  （append 前有 .fi-undo- 快照）
 EOF
