@@ -31,12 +31,14 @@ FI_RE = re.compile(r'\bfixindex\s+(fi|new|auto)\b')
 GIT_RE = re.compile(r'\bgit\b[^\n;|&]*\b(commit|push)\b')
 FIXES_PATH_RE = re.compile(r'/memory/fixes/[^/]+\.md$')
 DEBUG_RE = re.compile(
-    r'error|錯誤|bug|fix(ed)?|修好|修復|除錯|debug|root cause|根因|崩'
-    r'|crashed?|timeout|401|fail(ed)?|stack trace|重試|troubleshoot', re.I)
+    r'\b(root cause|regression)\b|根因|修好|修復|除錯完成|已修正|bug\s*fix|fixed\s+the\b', re.I)
 # 不算「動過東西」的寫入目標：計畫／工單／報告草稿、暫存區。談論 defect 而只寫這些檔的
 # 純規劃輪，不該被當成修過 defect。Bash 的 in-place 編輯（sed -i 等）目前不計入，
 # 寧可漏抓也不要誤擋；真的改了通常伴隨 git commit，那條已由 git_commit_seen 認列。
 NON_MUTATING_PATH_RE = re.compile(r'/\.claude/plans/|/scratchpad/|^/private/tmp/|^/tmp/')
+CODE_EXT_RE = re.compile(
+    r'\.(js|mjs|cjs|ts|tsx|jsx|py|sh|bash|zsh|rb|go|rs|java|c|h|cpp|swift|kt|php|sql|toml|ya?ml|json)$',
+    re.I)
 
 fi_called = False
 git_commit_seen = False
@@ -77,7 +79,7 @@ try:
                             fp = str(inp.get('file_path') or '') if isinstance(inp, dict) else ''
                             if FIXES_PATH_RE.search(fp):
                                 fixes_edited = True
-                            if fp and not NON_MUTATING_PATH_RE.search(fp):
+                            if fp and CODE_EXT_RE.search(fp) and not NON_MUTATING_PATH_RE.search(fp):
                                 mutated = True
                     elif b.get('type') == 'text':
                         if DEBUG_RE.search(str(b.get('text') or '')):
@@ -86,8 +88,11 @@ except Exception:
     pass
 
 
-def block(reason):
-    print(json.dumps({'decision': 'block', 'reason': reason}, ensure_ascii=False))
+def remind(reason):
+    # v5 abolish：fi-reminder 唯一 block 出口降為提醒（工單 P3）。
+    # 不再阻斷；保留事實查核計算，只印 [FI-REMIND] systemMessage 後結束。
+    print(json.dumps({'continue': True, 'suppressOutput': True,
+                      'systemMessage': '[FI-REMIND] ' + reason}, ensure_ascii=False))
     sys.exit(0)
 
 
@@ -129,10 +134,10 @@ if fi_called or git_commit_seen or fixes_edited:
                 f"（{detail}）。補同步後再停：unpushed commit 先 `git push`；"
                 '落後 remote 先 `git pull --rebase --autostash`；'
                 '若確認無需同步，一句話說明後即可停。')
-        block(reason)
+        remind(reason)
 
 # ---- 規模門檻：小任務不值得 fi 成本 ----
-THRESHOLD = 10
+THRESHOLD = 40
 if tool_calls < THRESHOLD:
     sys.exit(0)
 
@@ -140,7 +145,7 @@ if tool_calls < THRESHOLD:
 # 需要「談到 defect」+「真的動過檔案」兩個證據同時成立。只有文字證據時，
 # 稽核／規劃／寫工單這類純討論輪會滿篇 fix/根因/error 而被誤擋。
 if debug_evidence and mutated and not fi_called:
-    block('fi-reminder: 本次疑似修過 defect，但未見 fixindex fi/new/auto 記入。'
+    remind('fi-reminder: 本次疑似修過 defect，但未見 fixindex fi/new/auto 記入。'
           '補記（printf "SYMPTOM: ...\\nFIX: ..." | fixindex fi，含實測數據與無效嘗試）；'
           '若確實無 defect 可記，一句話說明後即可停。')
 
