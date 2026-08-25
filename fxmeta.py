@@ -136,13 +136,14 @@ def _needs_yaml_quotes(s):
 
 
 def _yaml_quote(s):
+    # ponytail: single-quoted YAML takes everything literally, so make it the
+    # default; only a string containing ' needs the escaping double-quote form.
+    # The old three-branch version fell through to a bare `return s` for
+    # strings holding " but no ', emitting unquoted YAML that failed to parse.
     s = str(s)
-    hs, hd = "'" in s, '"' in s
-    if hs and hd:
-        return "'" + s.replace("'", "''") + "'"
-    if hs:
+    if "'" in s:
         return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
-    return "'" + s.replace("'", "''") + "'" if not hd else s
+    return "'" + s + "'"
 
 
 # ── 已知欄位定義 ────────────────────────────────────────────
