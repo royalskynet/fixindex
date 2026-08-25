@@ -231,6 +231,8 @@ def _build_entry(fid, fn, sn, heading, fm, bi, cont):
     toks.extend(ts)
     # body 1x
     toks.extend(tokenize(cont))
+    # §4: section-level trust metadata (read-only; legacy → unverified)
+    state, last, outcome, ev = fxmeta.section_summary(cont)
     return {
         'key': f'{fid}#{sn}',
         'file': fn,
@@ -238,7 +240,20 @@ def _build_entry(fid, fn, sn, heading, fm, bi, cont):
         'heading': heading,
         'type': str(fm.get('type') or 'defect'),
         'tokens': toks,
+        # trust metadata (may be empty for legacy entries)
+        'trust_state': state,
+        'last_verified': last,
+        'outcome': outcome,
     }
+
+
+BADGE = {'verified': 'V', 'unverified': 'U', 'stale': 'S', 'blocked': 'B', 'superseded': 'X'}
+
+
+def _badge(state):
+    """One-char trust badge: [V] verified, [U] unverified, [S] stale, [B] blocked, [X] superseded."""
+    b = BADGE.get(state, 'U')
+    return f'[{b}]'
 
 
 def main():
@@ -295,11 +310,13 @@ def main():
             break
     if json_out:
         hits = [{'key': e['key'], 'file': e['file'], 'section': e['section'],
-                 'heading': e['heading'], 'score': round(s, 3)} for e, s in top]
+                 'heading': e['heading'], 'score': round(s, 3),
+                 'trust_state': e['trust_state'], 'last_verified': e['last_verified'],
+                 'outcome': e['outcome']} for e, s in top]
         print(json.dumps({'query': q, 'hits': hits}, ensure_ascii=False))
     else:
         for e, s in top:
-            print(f"  {e['key']:<8} {e['section']:<5} ({s:4.2f})  {e['heading']}")
+            print(f"  {e['key']:<8} {_badge(e['trust_state'])} {e['section']:<5} ({s:4.2f})  {e['heading']}")
         print(f"\nmatched {len(results)} sections; showing top {len(top)}")
 
 

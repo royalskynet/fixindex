@@ -10,7 +10,7 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
   - 重複時取代舊條目 (保留線索, 少走彎路)
 """
 
-import sys, os, json, re, subprocess, glob as _glob, tempfile
+import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
 import fxmeta
 import fxsync
 
@@ -203,9 +203,11 @@ def _merge_symptoms(path, new_symps):
         f.writelines(lines)
 
 
-def _append_to_file(path, title, symps, root, fix, verify, detail=''):
+def _append_to_file(path, title, symps, root, fix, verify, detail='', trust=None):
     """Append a renumbered §N section to an existing file. NEVER rewrites its
-    title (B2); snapshots the original to /tmp first (B3)."""
+    title (B2); snapshots the original to /tmp first (B3). trust: dict like
+    {'evidence': '...'} → writes **State:** verified / **Evidence:** /
+    **Last verified:** (today) into the new section (legacy otherwise)."""
     import time, shutil
     with open(path) as f:
         txt = f.read()
@@ -218,6 +220,11 @@ def _append_to_file(path, title, symps, root, fix, verify, detail=''):
     secs = [int(m) for m in re.findall(r'^## §(\d+)', txt, re.M)]
     n = (max(secs) + 1) if secs else 1
     lines = [f'## §{n} {title or "記錄"}', '']
+    if trust and trust.get('evidence'):
+        lines.append('**State:** verified')
+        lines.append(f"**Evidence:** {trust['evidence']}")
+        lines.append(f'**Last verified:** {datetime.date.today().isoformat()}')
+        lines.append('')
     lines.append('**Symptom:** ' + '; '.join(symps))
     lines.append('')
     lines.append('**Root cause:** ' + root)
@@ -273,7 +280,12 @@ def find_duplicate(title, etype='defect'):
     return best
 
 
-def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail=''):
+def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail='',
+                evidence=None):
+    """Build a defect entry scaffold. If evidence is non-empty AND verify is
+    non-empty, the first section is marked **State:** verified with **Evidence:**
+    and **Last verified:** (today, ISO). Otherwise legacy-compatible (no trust
+    fields)."""
     parts = []
     parts.append('---')
     parts.append(f'id: "{fid}"')
@@ -307,6 +319,12 @@ def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail
     parts.append('## §4 Verify')
     parts.append('')
     parts.append(verify)
+    if evidence and str(verify or '').strip():
+        today = datetime.date.today().isoformat()
+        parts.append('')
+        parts.append('**State:** verified')
+        parts.append(f'**Evidence:** {evidence}')
+        parts.append(f'**Last verified:** {today}')
     if detail:
         parts.append('')
         parts.append('## §5 詳情')
@@ -484,6 +502,52 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     return snap, n
 
 
+# §6: repeat → eval 提示。只在寫入路徑（fi/auto committed）觸發；最多一則。
+def repeat_eval_hint(path, title, symps, new_secn=None):
+    """Return a hint line
+    FIXINDEX_REPEAT_EVAL key=<ID#N> reason=<repeat|failed_outcome> recommendation=...
+    or None. Triggers (once):
+      - repeat: same domain file already has >=3 sections whose heading tokens
+        overlap the incoming title/symptoms >= 50%.
+      - failed_outcome: the section being written already has Outcome failed>=2.
+    Never mutates; never spawns; at most one line."""
+    if not title:
+        return None
+    base = os.path.basename(path)
+    try:
+        with open(path, encoding='utf-8') as f:
+            txt = f.read()
+    except Exception:
+        return None
+    try:
+        import fxsearch
+        inc = set(fxsearch.tokenize(title))
+        for s in symps:
+            inc |= set(fxsearch.tokenize(s))
+    except Exception:
+        inc = set()
+    _, body_start = fxmeta.parse_frontmatter_full(txt)
+    similar = 0
+    first_reason = None
+    for num, heading, body in fxmeta.iter_sections(txt, body_start):
+        # repeat: count highly-similar headings
+        hs = set()
+        try:
+            hs = set(fxsearch.tokenize(heading))
+        except Exception:
+            hs = set()
+        if hs and inc and (len(inc & hs) / max(len(hs), 1)) >= 0.5:
+            similar += 1
+            if similar >= 3 and not first_reason:
+                first_reason = f'FIXINDEX_REPEAT_EVAL key={base[:4]}#{num} reason=repeat recommendation=regression_test'
+        # failed_outcome: target section (or any section when appending new)
+        if not first_reason and (new_secn is None or num == new_secn):
+            _, _, outcome, _ = fxmeta.section_summary(body)
+            if outcome.get('failed', 0) >= 2:
+                first_reason = f'FIXINDEX_REPEAT_EVAL key={base[:4]}#{num} reason=failed_outcome recommendation=health_check'
+    return first_reason
+
+
 def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
     """INSIGHT: pipe 的寫入管線（shadow / dedup-supersede / domain-append / new-file，
     與 defect 管線平行；etype 全帶 insight）。QUERIES → symptoms 供未來查詢。
@@ -578,6 +642,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
     root = fields.get('root', 'untraced')
     fix = fields.get('fix', 'applied')
     verify = fields.get('verify', 'verified')
+    evidence = fields.get('evidence', '')
 
     symps = [s.strip() for s in sympt.split(';') if s.strip()]
     if not symps:
@@ -594,7 +659,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
     dup = find_duplicate(title)
 
     if mode == '--shadow':
-        payload = {'preview_lines': len(build_entry(next_id(), title, symps, root, fix, verify, '', tags).split('\n'))}
+        payload = {'preview_lines': len(build_entry(next_id(), title, symps, root, fix, verify, '', tags, '', evidence).split('\n'))}
         if dup:
             payload['dedup'] = {'supersedes': dup[0], 'overlap': round(dup[1], 2)}
         else:
@@ -606,7 +671,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         old_id = dup[0]
         new_id = next_id()
         slug = slugify(title)
-        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail)
+        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
         old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
         import glob as _g
@@ -618,6 +683,12 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
+        # §6: dedup-supersede 也算「同一 domain 反覆相似故障」——若被取代檔
+        # 已有 >=3 相似 section，仍提示（同次最多一則）。
+        hint_path = old_files[0] if old_files else path
+        hint = repeat_eval_hint(hint_path, title, symps, new_secn=None)
+        if hint:
+            print(hint, file=sys.stderr)
         if not defer_commit:
             payload.update(_git_commit_push(paths))
         return payload, paths
@@ -625,17 +696,22 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         # 無重複 → 先試 domain append（分級匹配，拒猜；不中才建新檔）
         match = find_domain_file_auto(title, symps)
         if match:
-            snap, sec = _append_to_file(match, title, symps, root, fix, verify, detail)
+            entry_meta = {'evidence': evidence} if (evidence and verify.strip()) else {}
+            snap, sec = _append_to_file(match, title, symps, root, fix, verify, detail,
+                                        trust=entry_meta)
             _run_index('re-index')
             payload = {'appended': os.path.basename(match), 'section': sec,
                        'dedup': False, 'undo': snap}
             paths = [match, _resolve_index_file()]
+            hint = repeat_eval_hint(match, title, symps, new_secn=sec)
+            if hint:
+                print(hint, file=sys.stderr)
             if not defer_commit:
                 payload.update(_git_commit_push(paths))
             return payload, paths
         fid = next_id()
         slug = slugify(title)
-        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail)
+        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail, evidence)
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
         path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
         with open(path, 'w') as f:
@@ -644,6 +720,9 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         _run_index('re-index')
         payload = {'created': path, 'dedup': False}
         paths = [path, _resolve_index_file()]
+        hint = repeat_eval_hint(path, title, symps, new_secn=1)
+        if hint:
+            print(hint, file=sys.stderr)
         if not defer_commit:
             payload.update(_git_commit_push(paths))
         return payload, paths
@@ -700,7 +779,7 @@ def main():
         if m:
             k = m.group(1).lower()
             v = m.group(2).strip()
-            if k in ('symptom', 'root', 'fix', 'verify'):
+            if k in ('symptom', 'root', 'fix', 'verify', 'evidence'):
                 fields.setdefault(k, v)
             elif k in ('context', 'insight', 'implication', 'revisit-when', 'queries', 'type'):
                 insight_fields[k] = v

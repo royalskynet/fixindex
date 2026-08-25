@@ -351,7 +351,9 @@ def state(fixdir):
     if rc == 0:
         lines = [l for l in porc.splitlines() if l.strip()]
         s['dirty_files'] = len(lines)
-        s['dirty_paths'] = [l[3:].strip() for l in lines][:20]
+        # ponytail: _run() strips whole stdout, so first line loses its leading
+        # space in porcelain "XY path" — slice at 2, strip handles the rest
+        s['dirty_paths'] = [l[2:].strip() for l in lines][:20]
     if s['dirty_files'] > 0:
         s['warnings'].append(f"{s['dirty_files']} dirty file(s)（未 commit 的工作樹）")
     if s['pending_push']:
