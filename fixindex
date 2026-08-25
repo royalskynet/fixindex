@@ -21,14 +21,31 @@ fi
 if [[ -z "${FIXINDEX_DIR:-}" && -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_DIR=' "$HOME/.zshenv" | head -1 || true)"
 fi
-if [[ -z "${FIXINDEX_INDEX:-}" && -f "$HOME/.zshenv" ]]; then
+# 0407: FIXINDEX_INDEX 只能沿用「與 FIXINDEX_DIR 同庫」的一維；跨行庫的
+# zshenv 殘留一律視為未提供，下游改走 derived（dirname(FIXINDEX_DIR)）。
+if [[ -n "${FIXINDEX_INDEX:-}" ]]; then
+  _idx_abs="$(cd "$(dirname "$FIXINDEX_INDEX")" 2>/dev/null && pwd || echo "$(dirname "$FIXINDEX_INDEX")")"
+  _fix_abs="$(cd "$(dirname "${FIXINDEX_DIR:-$PWD/fixes}")" 2>/dev/null && pwd || echo "${FIXINDEX_DIR:-$PWD/fixes}")"
+  if [[ "$_idx_abs" != "$_fix_abs" ]]; then
+    unset FIXINDEX_INDEX
+  fi
+fi
+if [[ -z "${FIXINDEX_INDEX:-}" ]] && [[ -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_INDEX=' "$HOME/.zshenv" | head -1 || true)"
 fi
 if [[ "$FIXDIR_SOURCE" == fallback ]]; then
   if [[ -n "${FIXINDEX_DIR:-}" ]]; then FIXDIR_SOURCE=zshenv; else FIXDIR_SOURCE=cwd; fi
 fi
 FIXDIR="${FIXINDEX_DIR:-$PWD/fixes}"
-INDEX_FILE="${FIXINDEX_INDEX:-$PWD/FIX-INDEX.md}"
+# 0407: 只有 FIXINDEX_DIR（相對 INDEX 未設）時，index 固定派生到
+# dirname(FIXINDEX_DIR)/FIX-INDEX.md —— 禁止落回 $PWD 污染 decoy／真庫。
+if [[ -n "${FIXINDEX_INDEX:-}" ]]; then
+  INDEX_FILE="$FIXINDEX_INDEX"
+elif [[ -n "${FIXINDEX_DIR:-}" ]]; then
+  INDEX_FILE="$(dirname "$FIXDIR")/FIX-INDEX.md"
+else
+  INDEX_FILE="$PWD/FIX-INDEX.md"
+fi
 RG="${RG:-rg}"
 FIXDIR_IS_DEFAULT=$([[ "$FIXDIR_SOURCE" == cwd ]] && echo 1 || echo 0)
 
@@ -141,6 +158,11 @@ Commands:
   fixindex re-index             regenerate FIX-INDEX.md directory table
   fixindex status              三段健康狀態：index 時效 / git 同步 / superseded lint（--assert-clean / --json）
   fixindex supersede <old> <new>  mark old superseded by new
+  fixindex mark <ID#N> <state> [--evidence T] [--date D] [--reason T]
+                               section trust state: verified|stale|blocked|superseded|unverified
+                               （verified 需 evidence+date；stale/blocked/superseded 需 --reason，不執行任何命令）
+  fixindex outcome <ID#N> <helpful|irrelevant|failed>   匿名 outcome counter（v1 只顯示不調分）
+  fixindex audit [ID#N|ID|--all] [--json]  section trust 檢查；0=clean 1=品質 2=用法
   fixindex fi                 一行 pipe 記 defect/經驗（自動 dedup→append→建新→commit）
                                `printf 'SYMPTOM: …\\nFIX: …' | fixindex fi`（自由文字也行）
                                混合輸入: SYMPTOM+INSIGHT 同 pipe → 拆兩筆(defect+insight)、單一 commit
@@ -960,11 +982,11 @@ else:
     cleaned_fields['id'] = expected_id
 
 # Ensure all standard fields exist
-standard_fields = ['id', 'slug', 'type', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'related']
+standard_fields = ['id', 'slug', 'type', 'title', 'tags', 'symptoms', 'status', 'supersedes', 'superseded_by', 'related']
 final_fields = {}
 for field in standard_fields:
-    # `type` 特例：有才寫、缺不回填，避免 defect 檔修復後多出 type
-    if field == 'type':
+    # `type` / `superseded_by` 特例：有才寫、缺不回填，避免 defect 檔修復後多出型別欄位 / 誤加 superseded_by: TODO
+    if field in ('type', 'superseded_by'):
         if field in cleaned_fields and cleaned_fields[field]:
             final_fields[field] = cleaned_fields[field]
         continue
@@ -989,7 +1011,15 @@ for field in standard_fields:
             for item in v:
                 new_fm.append(f"  - {item}")
         else:
-            new_fm.append(f"{field}: {v}")
+            # id / superseded_by 加雙引號，避免 YAML 把數值 `0476` 當八進位、或把 value 當 label。
+            # 值若已自帶外層引號（wrapped 巢狀來源如 `"0002"`）就不重包，避免 `""0002""`。
+            if field in ('id', 'superseded_by'):
+                raw = v if isinstance(v, str) else str(v)
+                if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
+                    raw = raw[1:-1]
+                new_fm.append(f'{field}: "{raw}"')
+            else:
+                new_fm.append(f"{field}: {v}")
 new_fm.append('---')
 
 # Write file
@@ -1278,12 +1308,12 @@ cmd_supersede() {
   old_f=$(resolve_id "$1")
   new_f=$(resolve_id "$2")
   # mark old as superseded + 補 superseded_by（否則 lint 報「superseded 但皆空」假陽性）
-  local old_id
-  old_id=$(basename "$old_f" | cut -d- -f1)
-  awk -v oid="$old_id" '
-    /^status:/ && !done_status { print "status: superseded"; print "superseded_by: " oid; done_status=1; next }
-    /^status:/ { print; next }
-    /^superseded_by:/ { print "superseded_by: " oid; next }
+  # superseded_by 必須是「取代者」的 id，也就是 new 檔的 id（曾誤用 old id 導致自我指向）。
+  local new_id
+  new_id=$(basename "$new_f" | cut -d- -f1)
+  awk -v nid="$new_id" '
+    /^superseded_by:/ { next }                 # 先移除既有欄位，避免重複 key
+    /^status:/ && !done_status { print "status: superseded"; print "superseded_by: \"" nid "\""; done_status=1; next }
     { print }
   ' "$old_f" > "${old_f}.tmp" && mv "${old_f}.tmp" "$old_f"
   rm -f "${old_f}.bak"
@@ -1294,6 +1324,68 @@ cmd_supersede() {
   ' "$new_f" > "${new_f}.tmp" && mv "${new_f}.tmp" "$new_f"
   cmd_re_index
   sync_push "$old_f" "$new_f" "$INDEX_FILE"
+}
+
+# ---- §5.1 mark / outcome / audit：section 級 trust metadata（fxmeta.py 唯一權威）----
+# 全部 read-back 驗證：fxmeta.mark 已回讀 section 確認；nonzero 才 commit+push。
+cmd_mark() {
+  [[ $# -ge 3 ]] || die "usage: fixindex mark <ID#N> <state> [--evidence TEXT] [--date YYYY-MM-DD] [--reason TEXT]"
+  local key="$1" state="$2" id
+  id=$(echo "$key" | cut -d# -f1)
+  local fpath
+  fpath=$(resolve_id "$id") || true
+  [[ -n "$fpath" ]] || die "no fix with id $id (key: $key)"
+  local fxmeta_py="$FX_DIR/fxmeta.py"
+  local out rc
+  out=$(FIXINDEX_DIR="$FIXDIR" python3 "$fxmeta_py" mark "$fpath" "$key" "$state" "${@:3}" 2>&1)
+  rc=$?
+  echo "$out"
+  [[ $rc -eq 0 ]] || die "$out"
+  sync_push "$fpath"
+}
+
+cmd_outcome() {
+  [[ $# -eq 2 ]] || die "usage: fixindex outcome <ID#N> <helpful|irrelevant|failed>"
+  local key="$1" which="$2" id
+  id=$(echo "$key" | cut -d# -f1)
+  local f; f=$(resolve_id "$id") || die "no fix with id $id"
+  local out rc
+  out=$(python3 "$FX_DIR/fxmeta.py" outcome "$f" "$key" "$which" 2>&1)
+  rc=$?
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  [[ $rc -eq 0 ]] || die "outcome failed"
+  sync_push "$f"
+}
+
+cmd_audit() {
+  # usage: fixindex audit <ID#N>|<ID>|--all [--json]
+  local json_flag="" key="${1:-}"
+  if [[ "$key" == "--json" ]]; then json_flag="--json"; shift; key="${1:-}"; fi
+  if [[ "$key" == "--all" || -z "$key" ]]; then
+    local f any_bad=0 line rc out
+    for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+      [[ -e "$f" ]] || continue
+      out=$(python3 "$FX_DIR/fxmeta.py" audit "$f" --json 2>/dev/null)
+      rc=$?
+      if [[ $rc -eq 1 ]]; then
+        any_bad=1
+        echo "  ## $(basename "$f")"
+        echo "$out"
+      fi
+    done
+    if [[ "$json_flag" == "--json" ]]; then
+      echo "{\"audit\": \"$( [[ $any_bad -eq 1 ]] && echo issues || echo clean )\"}"
+    else
+      if [[ $any_bad -eq 1 ]]; then echo "audit: issues found"; else echo "audit: all clean"; fi
+    fi
+    return "$( [[ $any_bad -eq 1 ]] && echo 1 || echo 0 )"
+  fi
+  local id f rc
+  id=$(echo "$key" | cut -d# -f1)
+  f=$(resolve_id "$id") || die "no fix with id $id"
+  python3 "$FX_DIR/fxmeta.py" audit "$f" $json_flag
+  rc=$?
+  exit $rc
 }
 
 cmd_auto() {
@@ -1427,6 +1519,9 @@ main() {
     status)    warn_if_default_dir; _cmd_status_fxstatus "$@" ;;
     re-index)  warn_if_default_dir; sync_pull; cmd_re_index; sync_push "$INDEX_FILE" ;;
     supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@" ;;
+    mark)      warn_if_default_dir; sync_pull; cmd_mark "$@" ;;
+    outcome)   warn_if_default_dir; sync_pull; cmd_outcome "$@" ;;
+    audit)     sync_pull_soft; cmd_audit "$@" ;;
     fi)        warn_if_default_dir; sync_pull; cmd_fi "$@" ;;
     auto)      warn_if_default_dir; sync_pull; cmd_auto "$@" ;;
     help|-h|--help) cmd_help ;;
