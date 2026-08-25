@@ -400,8 +400,10 @@ cmd_re_index() {
   fi
 
   local tmp tbl
-  tmp=$(mktemp)
-  tbl=$(mktemp)
+  # ponytail: bare mktemp uses darwin confstr (/var/folders/...) and ignores
+  # TMPDIR, which sandboxed runs cannot write — an explicit template honours it
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
+  tbl=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
   local todo_list=""
   {
     echo "| ID | Slug | Title | Tags |"
