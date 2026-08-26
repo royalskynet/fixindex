@@ -148,6 +148,87 @@ class BM25Engine:
         scores = [(i, self.score(i, qt)) for i in range(self.n)]
         return sorted([(i, s) for i, s in scores if s > 0], key=lambda x: -x[1])[:limit * 2]
 
+# ── 可選的語意層（hybrid retrieval）──
+#
+# 為什麼需要：BM25 是字面比對，中文口語 query 會整個打偏。「壓縮爆掉救不回來」
+# 的未知詞被 _cjk_segment 退化成滑動 bigram（縮爆/爆掉/掉救/救不/不回/回來），
+# 這些碎片因為稀有反而拿到高 idf，把真正的訊號稀釋掉 —— 該命中的 0573
+# （標題「壓縮失敗的錯誤訊息會教你把 reserve 調高」）連前 5 名都進不了。
+#
+# 反過來，語意層對「本地服務好像死了」這種**已經有明確字面錨點**的 query
+# 反而不如 BM25（0574 標題就寫著服務死活，BM25 穩拿第 1，語意排不進前 5）。
+#
+# 兩者是互補的，不是誰取代誰。實測（1684 sections，2 個 ground truth）：
+#   query                BM25   語意   RRF   加權相加
+#   壓縮爆掉救不回來      —      1     2     1
+#   本地服務好像死了      1      —     1     1
+# 所以用加權相加而非 RRF：兩題都拿第 1，且少一個 k 參數。代價是它依賴分數
+# 尺度（RRF 的賣點正是不依賴），若日後評估集擴大後發現不穩，換回 RRF 即可。
+#
+# 這一層是**選配**。沒裝 model2vec / numpy 就自動退回純 BM25，
+# fixindex 的零依賴特性不受影響。設 FIXINDEX_SEMANTIC=0 可強制關閉。
+SEMANTIC_MODEL = os.environ.get('FIXINDEX_SEMANTIC_MODEL',
+                                'minishlab/potion-multilingual-128M')
+_SEM_CACHE = None
+
+
+def _semantic_layer():
+    """Return (model, numpy) or None when unavailable. Cached per process."""
+    global _SEM_CACHE
+    if _SEM_CACHE is not None:
+        return _SEM_CACHE or None
+    if os.environ.get('FIXINDEX_SEMANTIC') == '0':
+        _SEM_CACHE = False
+        return None
+    try:
+        # 這些套件的環境警告（urllib3/OpenSSL、tokenizers fork）會噴到 stderr，
+        # 污染 CLI 輸出與呼叫它的 hook。檢索工具的 stderr 該只留真錯誤。
+        import warnings
+        warnings.filterwarnings('ignore')
+        os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+        import numpy as np
+        from model2vec import StaticModel
+        _SEM_CACHE = (StaticModel.from_pretrained(SEMANTIC_MODEL), np)
+    except Exception:
+        # 沒裝套件、模型沒下載、離線 —— 一律安靜退回 BM25，不吵使用者。
+        _SEM_CACHE = False
+        return None
+    return _SEM_CACHE
+
+
+def _normalize(pairs):
+    """把 (idx, score) 清單的分數壓到 0..1，讓兩路可以相加。"""
+    if not pairs:
+        return {}
+    top = max(s for _, s in pairs) or 1.0
+    return {i: s / top for i, s in pairs}
+
+
+def search_hybrid(engine, entries, query, limit=8):
+    """BM25 ∪ 語意，各自正規化後等權相加。語意層缺席時等同 bm.search()。"""
+    lexical = engine.search(query, limit=limit)
+    sem = _semantic_layer()
+    if not sem:
+        return lexical
+    model, np = sem
+    try:
+        mat = model.encode([e['raw'] for e in entries], show_progress_bar=False)
+        # 空 section 會編出零向量。除以 (norm + eps) 不夠 —— 那是 0/1e-9，
+        # 後續 matmul 仍會踩到 divide-by-zero / overflow。零向量要原樣留著。
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        mat = mat / np.where(norms < 1e-9, 1.0, norms)
+        vec = model.encode([query])[0]
+        qn = np.linalg.norm(vec)
+        vec = vec / (qn if qn >= 1e-9 else 1.0)
+        sims = np.nan_to_num(mat @ vec, nan=0.0, posinf=0.0, neginf=0.0)
+        semantic = [(int(i), float(sims[i])) for i in np.argsort(-sims)[:limit * 2]]
+    except Exception:
+        return lexical
+    a, b = _normalize(lexical), _normalize(semantic)
+    merged = {i: a.get(i, 0.0) + b.get(i, 0.0) for i in set(a) | set(b)}
+    return sorted(merged.items(), key=lambda x: -x[1])[:limit * 2]
+
+
 # ── frontmatter 解析：重用 fxmeta（單一解析權威），不再自造 parse_fm ──
 import fxmeta
 
@@ -240,6 +321,9 @@ def _build_entry(fid, fn, sn, heading, fm, bi, cont):
         'heading': heading,
         'type': str(fm.get('type') or 'defect'),
         'tokens': toks,
+        # 原文（未分詞）供可選的語意層做 embedding。BM25 只吃 tokens，
+        # 但 embedding 要看得懂句子 —— 餵分詞後的 bigram 碎片會毀掉語意。
+        'raw': f"{str(fm.get('title') or '')}\n{heading}\n{cont}"[:2000],
         # trust metadata (may be empty for legacy entries)
         'trust_state': state,
         'last_verified': last,
@@ -295,7 +379,7 @@ def main():
             print("(no entries)")
         return
     bm = BM25Engine(entries)
-    results = bm.search(q, limit=limit)
+    results = search_hybrid(bm, entries, q, limit=limit)
     # group by file
     seen = {}
     top = []

@@ -171,7 +171,7 @@ python3 fxsearch.py <kw>  # 直接呼叫 BM25 引擎
 `fxsearch.py` 是章節級 BM25 檢索：
 - 每個 `## §N` 是獨立檢索單元
 - Fields 權重：`symptoms` 3x、`tags` 1.5x、`heading` 2x、`body` 1x
-- 支援 CJK 分詞（字符 + bigram）
+- 支援 CJK 分詞（字典優先 + bigram fallback）
 - `--json` 輸出結構化結果，供 agent/hook 消費
 
 ```bash
@@ -179,13 +179,69 @@ python3 fxsearch.py "wrapped frontmatter"                 # 文字輸出
 python3 fxsearch.py --json --limit 3 "wrapped frontmatter" # JSON
 ```
 
+### 兩種檢索模式
+
+| 模式 | 依賴 | 適合 |
+|---|---|---|
+| **零依賴**（預設） | 只要 Python 標準庫 | 錯誤訊息、堆疊、識別碼 —— 有明確字面錨點的 query |
+| **Hybrid**（選配） | `model2vec` + `numpy` | 口語、換句話說的 query |
+
+**為什麼要兩種：因為它們會在不同的地方各自全滅。**
+
+BM25 是字面比對。中文口語 query 的未知詞會被分詞退化成滑動 bigram
+（「壓縮爆掉救不回來」→ 縮爆/爆掉/掉救/救不/不回/回來），這些碎片因為稀有反而拿到
+高 idf，把真正的訊號稀釋掉。反過來，語意層對本來就有字面錨點的 query 又不如 BM25。
+
+在 1684 個 section 上的實測（✅ = 命中該題的正確條目）：
+
+| Query | BM25 | 純語意 | Hybrid |
+|---|---|---|---|
+| 「壓縮爆掉救不回來」（要 0573） | 前 5 名找不到 | ✅ 第 1 | ✅ **第 1** |
+| 「本地服務好像死了」（要 0574） | ✅ 第 1 | 前 5 名找不到 | ✅ **第 1** |
+
+融合方式是**兩路分數各自 max-normalize 後等權相加**，不是 RRF。同一組實測裡
+RRF 拿到第 2 / 第 1，加權相加兩題都第 1，而且少一個 `k` 參數要調。代價是加權法
+依賴分數尺度（RRF 的賣點正是不依賴），而評估集只有 2 個 ground truth，樣本很小 ——
+若你的語料上發現不穩，`search_hybrid()` 換回 RRF 只是幾行。
+
+### 啟用 Hybrid
+
+```bash
+pip install model2vec          # numpy 會一併裝上
+fixindex find "壓縮爆掉救不回來"  # 首次會下載 ~100MB 模型並快取
+```
+
+用的是 `minishlab/potion-multilingual-128M`（101 種語言的靜態 embedding，
+CPU 上比一般 sentence-transformer 快約 500 倍）。整份語料的 embedding 只有 1.7 MB。
+
+| 環境變數 | 作用 |
+|---|---|
+| `FIXINDEX_SEMANTIC=0` | 強制關閉語意層，退回純 BM25 |
+| `FIXINDEX_SEMANTIC_MODEL` | 換模型（預設 `minishlab/potion-multilingual-128M`） |
+
+**沒裝也不會壞** —— import 失敗、模型沒下載、離線，一律安靜退回純 BM25，
+不噴警告。零依賴仍然是預設路徑。
+
+### 成本，以及該在哪裡關掉它
+
+語意層讓單次查詢多約 **2.9 秒**，幾乎全是模型載入而非計算（1684 篇 embedding
+只要 0.1s，query encode 0.002s）。
+
+所以**任何自動召回的 hook 都應該關掉它**。實例：某個 `UserPromptSubmit` hook 給
+`fixindex find` 的 timeout 是 8000ms，而 hybrid 實測 7.7s —— 只剩 0.3s 餘裕，
+而該 hook 是 fail-open，超時就靜默變成「沒有舊帳」，比報錯更難察覺。把
+`FIXINDEX_SEMANTIC: '0'` 放進 hook 的 env 即可（實測降到 3.8s）。
+
+這個分工剛好對上兩條路徑的性質：hook 的 query 是從 prompt 抽出的錯誤訊息，
+字面錨點充足，正是 BM25 的主場；語意層是為了救人工打的口語 query。
+
 ---
 
 ## Python 工具生態
 
 | 工具 | 角色 |
 |---|---|
-| `fxsearch.py` | BM25 語意檢索（`find` 的引擎） |
+| `fxsearch.py` | 檢索引擎（`find` 的核心）：BM25，選配 hybrid 語意層 |
 | `fxmeta.py` | frontmatter 解析/正規化/scan（單一解析權威，不依賴 PyYAML） |
 | `fxauto.py` | shadow-mode 自動建立條目 |
 | `fxblurb.py` | 為每個 § 生成 contextual blurb + 詞彙擴充（產生 `.blurbs.jsonl`，提升中文召回率） |
@@ -315,7 +371,7 @@ CLI 本身不需要 Node 或 Python；只有語意/自動化工具需要 Python�
 
 考慮過其他方案，沒收進來的理由：
 
-- **SQLite / vector DB**：多一個二進位、多一個 daemon。對幾百個 markdown 檔 `ripgrep` 本來就 < 50ms。
+- **SQLite / vector DB**：多一個二進位、多一個 daemon。對幾百個 markdown 檔 `ripgrep` 本來就 < 50ms。選配的語意層沒有推翻這條：embedding 是查詢時用一顆 ~30MB 靜態模型當場算的（1684 個 section 共 1.7 MB），不落盤、沒有索引要重建或壞掉，把套件移除就回到純 BM25。
 - **編輯器外掛**：綁死一個編輯器。CLI 在任何 terminal 都能用，含 SSH 與 agent 的 `bash` 工具。
 - **一個 fix 一個檔（純 adr-tools）**：個人 bug 日誌會炸成幾百個小檔。改用 *domain* 分組壓住檔案數。
 - **LLM 自動摘要 / tag**：非確定性。frontmatter 是索引，你手寫一次永遠信它。

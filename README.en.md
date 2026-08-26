@@ -27,7 +27,10 @@ export FIXINDEX_DIR="$HOME/notes/runbook/fixes"
 export FIXINDEX_INDEX="$HOME/notes/runbook/FIX-INDEX.md"
 ```
 
-Requirements: `bash` 4+, `ripgrep` (`brew install ripgrep`), `awk`, `find`. macOS and Linux. No Node or Python needed.
+Requirements: `bash` 4+, `ripgrep` (`brew install ripgrep`), `awk`, `find`. macOS and Linux.
+No Node, no database, no daemon. Python 3 (stdlib only) backs `fixindex find`; everything
+else is shell. The optional hybrid semantic layer is the one thing that wants a pip
+install — see [Retrieval: two modes](#retrieval-two-modes).
 
 ## Workflow
 
@@ -132,6 +135,69 @@ The test is mechanical: **if you can't write a `Symptom` someone would plausibly
 
 Env vars: `FIXINDEX_DIR`, `FIXINDEX_INDEX`, `RG`.
 
+## Retrieval: two modes
+
+| Mode | Dependencies | Good at |
+|---|---|---|
+| **Zero-dependency** (default) | Python stdlib only | Error strings, stack traces, identifiers — queries with literal anchors |
+| **Hybrid** (opt-in) | `model2vec` + `numpy` | Colloquial queries, paraphrases |
+
+**Why both: each one goes blind exactly where the other doesn't.**
+
+BM25 matches literally. An unknown word in a colloquial query degrades into sliding
+bigrams during segmentation — especially in CJK — and those rare fragments pick up
+high idf, drowning out the real signal. Conversely, the semantic layer loses to BM25
+on queries that already carry a strong literal anchor.
+
+Measured over 1684 sections (✅ = found that query's correct entry):
+
+| Query | BM25 | Semantic only | Hybrid |
+|---|---|---|---|
+| "壓縮爆掉救不回來" (wants 0573) | not in top 5 | ✅ rank 1 | ✅ **rank 1** |
+| "本地服務好像死了" (wants 0574) | ✅ rank 1 | not in top 5 | ✅ **rank 1** |
+
+Fusion is **max-normalized scores added with equal weight**, not RRF. On the same
+evaluation RRF landed at rank 2 / rank 1 while weighted addition took rank 1 on both,
+and it has one fewer knob (`k`) to tune. The tradeoff: weighted addition depends on
+score scale, which is precisely what RRF avoids — and the evaluation set is only two
+ground truths, so the sample is small. If it proves unstable on your corpus, swapping
+`search_hybrid()` back to RRF is a few lines.
+
+### Enabling hybrid
+
+```bash
+pip install model2vec          # pulls in numpy
+fixindex find "compaction keeps blowing up"   # first run downloads a ~100MB model, then caches
+```
+
+It uses `minishlab/potion-multilingual-128M` — static embeddings across 101 languages,
+roughly 500× faster than a regular sentence-transformer on CPU. Embeddings for the
+whole corpus come to 1.7 MB.
+
+| Env var | Effect |
+|---|---|
+| `FIXINDEX_SEMANTIC=0` | Force the semantic layer off; pure BM25 |
+| `FIXINDEX_SEMANTIC_MODEL` | Use a different model (default `minishlab/potion-multilingual-128M`) |
+
+**Nothing breaks if it isn't installed.** Import failure, missing model, offline — all
+degrade silently to pure BM25 with no warning. Zero-dependency stays the default path.
+
+### Cost, and where to turn it off
+
+The semantic layer adds roughly **2.9 seconds** per query — almost entirely model
+loading, not computation (embedding all 1684 sections takes 0.1s; encoding the query
+takes 0.002s).
+
+So **any automatic-recall hook should turn it off.** A real case: a `UserPromptSubmit`
+hook gave `fixindex find` an 8000ms timeout, and hybrid measured 7.7s — 0.3s of
+headroom, on a hook that fails open, so a timeout silently becomes "no prior history
+found," which is harder to notice than an error. Put `FIXINDEX_SEMANTIC: '0'` in the
+hook's env (measured: down to 3.8s).
+
+The split matches how the two paths differ: a hook's query is an error message lifted
+from the prompt — dense with literal anchors, BM25's home turf. The semantic layer
+exists to rescue the colloquial queries humans type.
+
 ## Natural language — no commands to memorize
 
 After installing the agent snippet, you don't need to type `fixindex` by hand. Just talk to the agent naturally. It reads intent and picks the right subcommand:
@@ -200,7 +266,7 @@ Turn "agent re-explores the whole repo" into "agent checks the runbook first" �
 
 Options considered and rejected:
 
-- **SQLite / vector DB.** Extra binary in dotfiles, extra daemon to babysit. `ripgrep` across ~30 Markdown files is already < 50 ms.
+- **SQLite / vector DB.** Extra binary in dotfiles, extra daemon to babysit. `ripgrep` across ~30 Markdown files is already < 50 ms. The optional semantic layer doesn't walk this back: embeddings are computed in-memory at query time from a ~30MB static model, 1.7 MB for a 1684-section corpus. Nothing is persisted, there's no index to rebuild or corrupt, and uninstalling the package returns you to pure BM25.
 - **Editor plugin.** Locks you to one editor. CLI works in any terminal, including SSH and an agent's `bash` tool.
 - **One file per fix (pure adr-tools style).** A personal bug log quickly balloons to hundreds of single-paragraph files. Domain grouping (`postgres-migrations.md` holds 10 related fixes) keeps file count manageable without losing granularity — each `## §N` section is still independently referenceable.
 - **LLM auto-summarize / auto-tag.** Non-deterministic. The frontmatter is the index — you write it once, you trust it forever.
