@@ -116,6 +116,7 @@ related: []
 | `fixindex supersede <old> <new>` | 標記 `<old>` 被 `<new>` 取代，保留檔案。 |
 | `fixindex fi` | 從 stdin 補記一條，自動配對 domain。見「寫入」一節。 |
 | `fixindex insights [<主題>]` | 只回 insight 型條目（無參數 = 列出全部）。見「記 insight」。 |
+| `fixindex prune [--json]` | 唯讀「遺忘候選」報告：無 `**Rule:**` + 單 § + active 的條目（不刪檔）。 |
 | `fixindex doctor` | 診斷並修復損壞的 frontmatter。 |
 | `fixindex help` | 顯示說明。 |
 
@@ -134,6 +135,16 @@ printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <可重跑的驗證命令>' |
 ```
 
 自由文字也行（`echo '一行症狀' | fixindex fi`）。`fixindex fi`（零參數）自動：dedup/supersede → domain 匹配 append 新 `## §N`（無匹配則建新檔）→ re-index → commit。不要再手動 append `## §N` 或編輯 frontmatter `symptoms:`。
+
+#### 記憶層三節點：INTAKE / COMPRESSOR / LINKER
+
+`fi` 的寫入管線是三個節點串起來的：
+
+- **LINKER（先）** —— `fxauto` 用 `fxsearch` 的 BM25 找「最相關的既有條目」。命中（top 對次高的領先比值 ≥ `FIXINDEX_LINK_RATIO`，預設 1.5）→ 被判定為「已知」，把這次個案當證據 append 進該條目成新 `## §N`，**不開新檔、不要求 RULE:**。這是記憶層的「拒絕為已知」。
+- **INTAKE（次）** —— LINKER 沒收容、要開**新**條目時才強制回答泛化問題：`RULE:`（可泛化規則）必填，否則 `exit 1`。個案被 LINKER 收成證據就**不必**寫 `RULE:`，只有真正開新條目才要過閘門。逃生門 `FIXINDEX_NO_GATE=1`。
+- **COMPRESSOR（最後）** —— 每次 commit 推進新寫入的 § 給 `fxblurb.py` 壓成一行 blurb 進 `.blurbs.jsonl`（讓語意層/詞彙擴充長得起來）。離線是常態，失敗一律吞掉、**絕不阻斷寫入**；逃生門 `FIXINDEX_NO_BLURB=1`。
+
+RULE: 是一行泛化規則（`RULE: 遇到這類問題先查 X`），寫進 body 供 grep / fxsearch 檢索，也是 `fixindex prune` 判斷「這條值不值得留」的依據。
 
 ### 記 insight（已固化設計決策）
 
@@ -243,9 +254,9 @@ CPU 上比一般 sentence-transformer 快約 500 倍）。整份語料的 embedd
 |---|---|
 | `fxsearch.py` | 檢索引擎（`find` 的核心）：BM25，選配 hybrid 語意層 |
 | `fxmeta.py` | frontmatter 解析/正規化/scan（單一解析權威，不依賴 PyYAML） |
-| `fxauto.py` | shadow-mode 自動建立條目 |
+| `fxauto.py` | `fi` 的寫入管線：泛化 INTAKE 閘門 + LINKER（BM25 關聯）+ COMPRESSOR（blurb） |
 | `fxblurb.py` | 為每個 § 生成 contextual blurb + 詞彙擴充（產生 `.blurbs.jsonl`，提升中文召回率） |
-| `fxadjudicate.py` | 寫入時裁決：APPEND / SUPERSEDE / NEW（用 `fxsearch` BM25） |
+| `fxprune.py` | 唯讀「遺忘候選」報告（`fixindex prune`，不刪檔） |
 
 所有工具都讀 `FIXINDEX_DIR`。**不設時 fallback 到 repo 自己的 `fixes/`，因此 clone 到任何路徑都能跑**（見「可移植性」）。
 
