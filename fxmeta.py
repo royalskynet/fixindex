@@ -423,6 +423,75 @@ def outcome(path, key, which):
     return {'ok': True, 'key': key, 'outcome': cur, 'path': path}
 
 
+def rule(path, key, text):
+    """Add a `**Rule:** <text>` line to section KEY. Returns dict.
+
+    Safe write path for backfilling generalization rules onto EXISTING fix
+    entries. Mirrors mark(): parses key, verifies frontmatter id match, locates
+    the section, never touches frontmatter or other sections, atomic write +
+    read-back verify.
+
+    Format: `**Rule:** <text>` placed as the LAST line of the section content
+    (blank line before it), i.e. after the last content line and before the next
+    `## §` heading — matching fixes/0589-*.md layout. Refuses to overwrite an
+    existing Rule line, and refuses empty/blank text."""
+    fid, secnum = parse_key(key)
+    text = (text or '').strip()
+    if not text:
+        return {'error': 'rule text is empty', 'key': key}
+    with open(path, encoding='utf-8') as f:
+        txt = f.read()
+    fm, _ = parse_frontmatter_full(txt)
+    fm_id = str(fm.get('id') or '').strip() or os.path.basename(path)[:4]
+    if str(fm_id).zfill(4) != f'{fid:04d}':
+        return {'error': f'id mismatch: frontmatter {str(fm_id).zfill(4)} != key {fid:04d}#{secnum}', 'key': key}
+
+    seg = find_section(secnum, txt)
+    if seg is None:
+        # 退化案例：術語只有「單一 §N」但章節號非 #1（如只有 ## §4）。
+        # 請求的章節不存在且恰好只有一個 § 時，自動落到那唯一章節（prune 的
+        # single-section 候選正是這類）。若有多個 § 仍找不到 → 維持錯誤。
+        all_secs = sorted({int(m.group(1))
+                           for ln in txt.split('\n')
+                           for m in [SECTION_HEAD.match(ln.strip())]
+                           if m})
+        if len(all_secs) == 1:
+            secnum = all_secs[0]
+            key = f'{fid:04d}#{secnum}'
+            seg = find_section(secnum, txt)
+    if seg is None:
+        return {'error': f'section §{secnum} not found in {os.path.basename(path)}', 'key': key}
+    header_lines, section_lines, trailer = seg
+
+    # 防重複：Rule 性質與放哪個 § 無關（fi 建檔時 RULE: 種子落在最後正規 § 尾部，
+    # 未必是 #1）。掃整個 body 任一 **Rule:**，免得漏欄寫入第二條。
+    if any(ln.strip().startswith('**Rule:**') for ln in txt.split('\n')):
+        return {'error': 'rule already present', 'key': key}
+
+    head = section_lines[0]
+    rest = section_lines[1:]
+    while rest and rest[-1].strip() == '':
+        rest.pop()                       # 去掉 section 尾部的空行，避免堆疊空行
+    new_section = [head] + rest + ['', f'**Rule:** {text}']
+
+    new_txt = '\n'.join(header_lines) + ('\n' if header_lines else '')
+    new_txt += '\n'.join(new_section)
+    if trailer:
+        new_txt += '\n' + '\n'.join(trailer)
+    if not txt.endswith('\n'):
+        new_txt += '\n'
+
+    _atomic_write(path, new_txt)
+
+    # read-back verify
+    rb = open(path, encoding='utf-8').read()
+    seg2 = find_section(secnum, rb)
+    ok = seg2 is not None and any(
+        ln.strip().startswith('**Rule:**') for ln in seg2[1])
+    return {'ok': ok, 'file': os.path.basename(path), 'key': key,
+            'rule': text, 'readback': ok}
+
+
 def audit_section(section_text, num, heading):
     """One section's audit. Returns ({state,last,evidence,outcome,problems}, is_insight)."""
     p = parse_section(section_text)
@@ -676,6 +745,12 @@ def main():
     elif cmd == 'outcome':
         path, key, which = sys.argv[2], sys.argv[3], sys.argv[4]
         r = outcome(path, key, which)
+        print(json.dumps(r, ensure_ascii=False))
+        sys.exit(0 if r.get('ok') else 2)
+
+    elif cmd == 'rule':
+        path, key, text = sys.argv[2], sys.argv[3], sys.argv[4]
+        r = rule(path, key, text)
         print(json.dumps(r, ensure_ascii=False))
         sys.exit(0 if r.get('ok') else 2)
 

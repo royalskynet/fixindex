@@ -70,6 +70,9 @@ def next_id():
 
 # LINKER：BM25 找候選 → token 覆蓋率確認。「被判定為已知」→ append 當證據，不開新檔。
 LINK_COVERAGE = float(os.environ.get('FIXINDEX_LINK_COVERAGE', '0.8'))
+# 明確領先要求：最佳候選覆蓋率須比第二名高 L​​INK_MARGIN，否則回 None。
+# 兩條都達覆蓋率 1.0 表示 query 分不出它們——寧可開新條目也不要掛錯地方。
+LINK_MARGIN = float(os.environ.get('FIXINDEX_LINK_MARGIN', '0.15'))
 
 
 def _path_for_id(fid):
@@ -87,6 +90,10 @@ def find_related(query, etype='defect'):
     語料，複述既有條目（最該收容）ratio=1.04、孤立罕見詞（最不該收容）ratio=1.04
     —— 兩端同值，零鑑別力。同一組樣本的覆蓋率則是 1.0 / 0.71（相近但不同案）/
     0.13（新主題）/ 0.0（孤立詞），乾淨分離，且不隨語料大小漂移。
+    回放表結論（tie-break 與 margin 的由來）：門檻 0.7→1.0，自連/誤連結果不動；但兩條
+    覆蓋率同為 1.0 時任取第一會約 40% 誤連。故 (a) 覆蓋率同位改用 BM25 raw score 當第二
+    排序鍵，(b) 加明確領先——最佳覆蓋率須比第二名高 FIXINDEX_LINK_MARGIN（預設 0.15），
+    否則回 None（寧可開新條目也不要掛錯地方）。單一候選或第二名未達門檻時跳過 margin。
     檢索掛掉 → 回 None（不拒寫）。"""
     if not query or not query.strip():
         return None
@@ -100,16 +107,25 @@ def find_related(query, etype='defect'):
             entries = [e for e in entries if e['type'] == etype]
         if not entries:
             return None
-        best = None
-        for i, _score in X.BM25Engine(entries).search(query, limit=5):
+        cands = []
+        for i, score in X.BM25Engine(entries).search(query, limit=5):
             cov = len(qt & set(entries[i]['tokens'])) / len(qt)
-            if best is None or cov > best[1]:
-                best = (entries[i], cov)
+            cands.append((entries[i], score, cov))
+        if not cands:
+            return None
+        # 排序：先覆蓋率降冪；同位用 BM25 raw score 降冪（tie-break，score 不再丟棄）。
+        cands.sort(key=lambda c: (c[2], c[1]), reverse=True)
+        best = cands[0]
+        # 明確領先要求：只有一個候選、或第二名未達門檻（不成競爭）時跳過 margin 檢查。
+        second = cands[1] if len(cands) > 1 else None
+        if second is not None and second[2] >= LINK_COVERAGE \
+                and (best[2] - second[2]) < LINK_MARGIN:
+            return None
+        if best[2] < LINK_COVERAGE:
+            return None
+        return (best[0]['file'][:4], round(best[2], 2))
     except Exception:
         return None
-    if best is None or best[1] < LINK_COVERAGE:
-        return None
-    return (best[0]['file'][:4], round(best[1], 2))
 
 
 def slugify(text, fallback='untitled'):
