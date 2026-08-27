@@ -56,18 +56,30 @@ printf 'SYMPTOM: 另一症狀 wwpp\nROOT: x\nFIX: y\n' \
 rc=$?
 if [ $rc -ne 0 ]; then ng "4.4c 逃生門 exit=$rc (want 0)"; else ok "4.4c 逃生門 exit=0"; fi
 
-# 4.5 LINKER: 對已存在 zzqq 條目再送高度相似 → exit 0、不被 INTAKE 擋、被既有條目收容
-# 判準: 「exit=0 未擋」+「不開重複新檔」(接受 dedup-supersede(created) / domain-append(appended) /
-#   或 LINKER(linked) 任一收容路徑)。plan 4.5 原鎖定 appended/linked，但語意相近的連發案例
-#   會被 find_duplicate 判重、走 dedup-supersede 而非 LINKER（LINKER 只在 dedup & domain-append
-#   皆 miss、且 BM25 有極強領先時才觸發）；「未被 INTAKE 堅硬擋下、既有條目被更新」才是
-#   4.5 要驗證的本質（修測試不修閘門，見 plan §4.8）。
-before=$(cnt "$A")
-printf 'SYMPTOM: 全新不重合症狀 zzqq 又出現一次\nROOT: x\nFIX: y\n' \
-  | FIXINDEX_DIR="$A/fixes" FIXINDEX_INDEX="$A/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$A/o4.json" 2>/dev/null
+# 4.5 LINKER: 專門構造走 LINKER 的案例 —— 新 title 的 token 全在既有條目 body 裡
+#   (覆蓋率 1.0)，但與既有 title 幾乎不重疊、檔名 slug 也不匹配，因此 find_duplicate
+#   與 find_domain_file_auto 雙 miss，只剩 LINKER 能收容。
+#   斷言只接受 "linked" —— 不接受 created/appended，那是 LINKER 沒生效時的 fallback
+#   輸出，混進允許集合會讓斷言恆真 (見 fixindex 0590)。
+newlib; B=$NL
+printf 'SYMPTOM: alphaqq betaqq 服務啟動失敗\nROOT: gammaqq deltaqq epsilonqq 設定錯誤\nFIX: 改回預設值\nRULE: 測試用泛化規則\n' \
+  | FIXINDEX_DIR="$B/fixes" FIXINDEX_INDEX="$B/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$B/seed.json" 2>/dev/null
+printf 'SYMPTOM: gammaqq deltaqq epsilonqq\nROOT: x\nFIX: y\n' \
+  | FIXINDEX_DIR="$B/fixes" FIXINDEX_INDEX="$B/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$B/o4.json" 2>/dev/null
 rc=$?
-if [ $rc -ne 0 ]; then ng "4.5 相近內容 exit=$rc (want 0, 不被 INTAKE 擋)"; else ok "4.5 相近內容 exit=0 未被 INTAKE 擋"; fi
-if grep -qE '"appended"|"linked"|"created"' "$A/o4.json"; then ok "4.5 JSON 含 appended/linked/created 收容結果"; else ng "4.5 JSON 冇收容結果: $(cat "$A/o4.json")"; fi
+if [ $rc -ne 0 ]; then ng "4.5 LINKER exit=$rc (want 0, 不被 INTAKE 擋)"; else ok "4.5 LINKER exit=0 未被 INTAKE 擋"; fi
+if grep -q '"linked"' "$B/o4.json"; then ok "4.5 JSON 含 linked (LINKER 實際生效)"; else ng "4.5 JSON 無 linked: $(cat "$B/o4.json")"; fi
+if [ "$(cnt "$B")" -eq 1 ]; then ok "4.5 未開新檔 (count=1)"; else ng "4.5 開了新檔 count=$(cnt "$B")"; fi
+if grep -q '## §2' "$B"/fixes/[0-9]*.md 2>/dev/null; then ok "4.5 既有條目長出 §2"; else ng "4.5 既有條目冇 §2"; fi
+
+# 4.5x 反向自檢: 把門檻拉到不可能達到 (9.9) → 同一輸入必須改走建新檔。
+#   這條在證明上面的斷言不是恆真 —— 關掉被測功能它會轉紅 (fixindex 0590 的 VERIFY)。
+newlib; C=$NL
+printf 'SYMPTOM: alphaqq betaqq 服務啟動失敗\nROOT: gammaqq deltaqq epsilonqq 設定錯誤\nFIX: 改回預設值\nRULE: 測試用泛化規則\n' \
+  | FIXINDEX_DIR="$C/fixes" FIXINDEX_INDEX="$C/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$C/seed.json" 2>/dev/null
+printf 'SYMPTOM: gammaqq deltaqq epsilonqq\nROOT: x\nFIX: y\nRULE: r\n' \
+  | FIXINDEX_DIR="$C/fixes" FIXINDEX_INDEX="$C/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 FIXINDEX_LINK_COVERAGE=9.9 "$PY" "$FXAUTO" --commit > "$C/o4x.json" 2>/dev/null
+if grep -q '"linked"' "$C/o4x.json"; then ng "4.5x 門檻 9.9 仍 linked → 4.5 斷言恆真"; else ok "4.5x 門檻 9.9 不再 linked (斷言非恆真)"; fi
 
 # 4.6 COMPRESSOR 不阻斷: FIXINDEX_NO_BLURB=1 逃生門 + LLM 不可用(本機 20130) 皆 exit 0
 t0=$(date +%s)

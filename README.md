@@ -140,7 +140,7 @@ printf 'SYMPTOM: ...\nROOT: ...\nFIX: ...\nVERIFY: <可重跑的驗證命令>' |
 
 `fi` 的寫入管線是三個節點串起來的：
 
-- **LINKER（先）** —— `fxauto` 用 `fxsearch` 的 BM25 找「最相關的既有條目」。命中（top 對次高的領先比值 ≥ `FIXINDEX_LINK_RATIO`，預設 1.5）→ 被判定為「已知」，把這次個案當證據 append 進該條目成新 `## §N`，**不開新檔、不要求 RULE:**。這是記憶層的「拒絕為已知」。
+- **LINKER（先）** —— retrieve-then-verify：`fxsearch` 的 BM25 找候選，再算「query token 被候選條目覆蓋的比例」。覆蓋率 ≥ `FIXINDEX_LINK_COVERAGE`（預設 0.8）→ 判定為「已知」，把這次個案當證據 append 進該條目成新 `## §N`，**不開新檔、不要求 RULE:**。這是記憶層的「拒絕為已知」。<br>用覆蓋率而非 top/次高的分數 ratio：ratio 衡量的是分數分佈的形狀，不是匹配程度。實測 509 條真實語料，複述既有條目與孤立罕見詞的 ratio 都是 1.04（兩端同值、零鑑別力），同組樣本的覆蓋率則是 1.0 / 0.71 / 0.13 / 0.0，乾淨分離。
 - **INTAKE（次）** —— LINKER 沒收容、要開**新**條目時才強制回答泛化問題：`RULE:`（可泛化規則）必填，否則 `exit 1`。個案被 LINKER 收成證據就**不必**寫 `RULE:`，只有真正開新條目才要過閘門。逃生門 `FIXINDEX_NO_GATE=1`。
 - **COMPRESSOR（最後）** —— 每次 commit 推進新寫入的 § 給 `fxblurb.py` 壓成一行 blurb 進 `.blurbs.jsonl`（讓語意層/詞彙擴充長得起來）。離線是常態，失敗一律吞掉、**絕不阻斷寫入**；逃生門 `FIXINDEX_NO_BLURB=1`。
 

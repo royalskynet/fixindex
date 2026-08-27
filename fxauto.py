@@ -68,9 +68,8 @@ def next_id():
     return f'{int(last) + 1:04d}'
 
 
-# LINKER：BM25 find_related。「被判定為已知」→ append 當證據，不開新檔。
-# 用 top/次高 raw-score ÷ ratio；見 find_related docstring 為何不能用絕對閾。
-LINK_RATIO = float(os.environ.get('FIXINDEX_LINK_RATIO', '1.5'))
+# LINKER：BM25 找候選 → token 覆蓋率確認。「被判定為已知」→ append 當證據，不開新檔。
+LINK_COVERAGE = float(os.environ.get('FIXINDEX_LINK_COVERAGE', '0.8'))
 
 
 def _path_for_id(fid):
@@ -80,34 +79,37 @@ def _path_for_id(fid):
 
 
 def find_related(query, etype='defect'):
-    """LINKER：用純 BM25（raw score）找最相關既有條目。
+    """LINKER：retrieve-then-verify。BM25 只負責找候選，命中與否由 query token
+    被候選條目覆蓋的比例（絕對量，0..1）決定。
 
-    回傳 (fid, ratio) 或 None。判準是「top hit 對次高 hit 的領先比值」而非絕對
-    分數——fxsearch CLI 把 top 正規化到 0..1，任何查詢頂部都是 1.0，絕對閾會把
-    孤立詞/不相關查詢也收進去。真正重複的 raw BM25 會遠超次高（實測重複≈2.0+，
-    新主題/孤立≈1.0-1.3）。命中且 ratio >= LINK_RATIO → 由呼叫端 append 當
-    證據。檢索掛掉 → 回 None（不拒寫）。"""
+    回傳 (fid, coverage) 或 None。不用「top 對次高的分數 ratio」：ratio 衡量的是
+    分數分佈的形狀（top 有多突出），不是 query 與條目的匹配程度。實測 509 條真實
+    語料，複述既有條目（最該收容）ratio=1.04、孤立罕見詞（最不該收容）ratio=1.04
+    —— 兩端同值，零鑑別力。同一組樣本的覆蓋率則是 1.0 / 0.71（相近但不同案）/
+    0.13（新主題）/ 0.0（孤立詞），乾淨分離，且不隨語料大小漂移。
+    檢索掛掉 → 回 None（不拒寫）。"""
     if not query or not query.strip():
         return None
     try:
         import fxsearch as X
+        qt = set(X.tokenize(query))
+        if not qt:
+            return None
         entries = X.build_entries(FIXINDEX_DIR)
         if etype:
             entries = [e for e in entries if e['type'] == etype]
         if not entries:
             return None
-        raw = X.BM25Engine(entries).search(query, limit=5)
-        if len(raw) < 2:
-            return None
-        top_i, top_s = raw[0]
-        second_s = raw[1][1]
-        ratio = (top_s / second_s) if second_s > 0 else 999.0
+        best = None
+        for i, _score in X.BM25Engine(entries).search(query, limit=5):
+            cov = len(qt & set(entries[i]['tokens'])) / len(qt)
+            if best is None or cov > best[1]:
+                best = (entries[i], cov)
     except Exception:
         return None
-    if ratio < LINK_RATIO:
+    if best is None or best[1] < LINK_COVERAGE:
         return None
-    e = entries[top_i]
-    return (e['file'][:4], round(ratio, 2))
+    return (best[0]['file'][:4], round(best[1], 2))
 
 
 def slugify(text, fallback='untitled'):
@@ -719,7 +721,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
             snap, secn = _append_to_file_insight(ref_path, title, context, insight,
                                                  impl, revisit, queries, detail)
             _run_index('re-index')
-            payload = {'etype': 'insight', 'linked': ref_id, 'score': round(ref_score, 3),
+            payload = {'etype': 'insight', 'linked': ref_id, 'coverage': round(ref_score, 3),
                        'appended': os.path.basename(ref_path), 'section': secn,
                        'dedup': False, 'undo': snap}
             paths = [ref_path, _resolve_index_file()]
@@ -833,7 +835,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
                 snap, sec = _append_to_file(ref_path, title, symps, root, fix, verify,
                                             detail, trust=entry_meta)
                 _run_index('re-index')
-                payload = {'linked': ref_id, 'score': round(ref_score, 3),
+                payload = {'linked': ref_id, 'coverage': round(ref_score, 3),
                            'appended': os.path.basename(ref_path), 'section': sec,
                            'dedup': False, 'undo': snap}
                 paths = [ref_path, _resolve_index_file()]
