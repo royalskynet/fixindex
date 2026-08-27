@@ -35,12 +35,81 @@ def _q(s):
     return fxmeta._yaml_quote(s) if fxmeta._needs_yaml_quotes(s) else s
 
 
+def _intake_gate(rule):
+    """INTAKE：建新條目前強制回答『未來的我知道了會不會表現不同』。
+    只擋建新檔；append/supersede 不擋（個案本來就該當證據掛在既有條目下）。
+    逃生門：FIXINDEX_NO_GATE=1。"""
+    if os.environ.get('FIXINDEX_NO_GATE') == '1':
+        return
+    if rule and rule.strip():
+        return
+    print(
+        "fixindex: INTAKE gate — 建新條目需要 RULE:（可泛化規則）\n"
+        "  1. 拿掉本案的專案名／路徑／具體值，這條經驗還成立嗎？\n"
+        "  2. 能不能提成「遇到這類問題先查什麼」的規則？\n"
+        "  3. 真的只在個案有意義 → 不要建新條目，append 到既有條目當證據。\n"
+        "\n"
+        "  範例：\n"
+        "    SYMPTOM: ...\n"
+        "    ROOT: ...\n"
+        "    FIX: ...\n"
+        "    RULE: 佔位 key 填進 .env 比不填更糟——先清空佔位再排查 401\n"
+        "\n"
+        "  逃生門：FIXINDEX_NO_GATE=1",
+        file=sys.stderr)
+    sys.exit(1)
+
+
 def next_id():
     files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
     if not files:
         return '0001'
     last = os.path.basename(files[-1])[:4]
     return f'{int(last) + 1:04d}'
+
+
+# LINKER：BM25 找候選 → token 覆蓋率確認。「被判定為已知」→ append 當證據，不開新檔。
+LINK_COVERAGE = float(os.environ.get('FIXINDEX_LINK_COVERAGE', '0.8'))
+
+
+def _path_for_id(fid):
+    """依條目 id 回傳 fixes/NNNN-*.md 完整路徑（唯一 4 碼前綴）。找不到回傳 None。"""
+    files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, f'{fid}-*.md')))
+    return files[0] if files else None
+
+
+def find_related(query, etype='defect'):
+    """LINKER：retrieve-then-verify。BM25 只負責找候選，命中與否由 query token
+    被候選條目覆蓋的比例（絕對量，0..1）決定。
+
+    回傳 (fid, coverage) 或 None。不用「top 對次高的分數 ratio」：ratio 衡量的是
+    分數分佈的形狀（top 有多突出），不是 query 與條目的匹配程度。實測 509 條真實
+    語料，複述既有條目（最該收容）ratio=1.04、孤立罕見詞（最不該收容）ratio=1.04
+    —— 兩端同值，零鑑別力。同一組樣本的覆蓋率則是 1.0 / 0.71（相近但不同案）/
+    0.13（新主題）/ 0.0（孤立詞），乾淨分離，且不隨語料大小漂移。
+    檢索掛掉 → 回 None（不拒寫）。"""
+    if not query or not query.strip():
+        return None
+    try:
+        import fxsearch as X
+        qt = set(X.tokenize(query))
+        if not qt:
+            return None
+        entries = X.build_entries(FIXINDEX_DIR)
+        if etype:
+            entries = [e for e in entries if e['type'] == etype]
+        if not entries:
+            return None
+        best = None
+        for i, _score in X.BM25Engine(entries).search(query, limit=5):
+            cov = len(qt & set(entries[i]['tokens'])) / len(qt)
+            if best is None or cov > best[1]:
+                best = (entries[i], cov)
+    except Exception:
+        return None
+    if best is None or best[1] < LINK_COVERAGE:
+        return None
+    return (best[0]['file'][:4], round(best[1], 2))
 
 
 def slugify(text, fallback='untitled'):
@@ -281,11 +350,11 @@ def find_duplicate(title, etype='defect'):
 
 
 def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail='',
-                evidence=None):
+                evidence=None, rule=''):
     """Build a defect entry scaffold. If evidence is non-empty AND verify is
     non-empty, the first section is marked **State:** verified with **Evidence:**
     and **Last verified:** (today, ISO). Otherwise legacy-compatible (no trust
-    fields)."""
+    fields). rule (RULE:) is written into the body so fxsearch/grep can reach it."""
     parts = []
     parts.append('---')
     parts.append(f'id: "{fid}"')
@@ -325,6 +394,9 @@ def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail
         parts.append('**State:** verified')
         parts.append(f'**Evidence:** {evidence}')
         parts.append(f'**Last verified:** {today}')
+    if rule and rule.strip():
+        parts.append('')
+        parts.append(f'**Rule:** {rule.strip()}')
     if detail:
         parts.append('')
         parts.append('## §5 詳情')
@@ -351,6 +423,11 @@ def _run_index(cmd, *args):
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixindex')
     if not os.path.exists(script):
         script = 'fixindex'  # fall back to PATH
+    # Windows 相容：`fixindex` 是 `#!/usr/bin/env bash` 腳本，native Windows Python
+    # 的 subprocess CreateProcess 無法直接執行無副檔名的 shell 腳本
+    # → OSError: [WinError 193]（不是有效的 Win32 應用程式），中斷 fi 的 re-index 收尾。
+    # 用 `bash <script>` 包裝（呼應 .bin/python3 shim 策略）；POSIX 維持原樣直跑。
+    launch = ['bash', script] if os.name == 'nt' else [script]
     env = fxsync.child_env(dict(os.environ))
     env['FIXINDEX_DIR'] = FIXINDEX_DIR
     env['FIXINDEX_INDEX'] = _resolve_index_file()
@@ -360,11 +437,11 @@ def _run_index(cmd, *args):
     env['FIXINDEX_NO_SYNC'] = '1'
     quiet = not cmd.startswith('re-index')
     if cmd == 're-index':
-        return subprocess.run([script] + cmd.split(' ') + list(args), env=env)
+        return subprocess.run(launch + cmd.split(' ') + list(args), env=env)
     if quiet:
-        return subprocess.run([script] + cmd.split(' ') + list(args), env=env,
+        return subprocess.run(launch + cmd.split(' ') + list(args), env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return subprocess.run([script] + cmd.split(' ') + list(args), env=env)
+    return subprocess.run(launch + cmd.split(' ') + list(args), env=env)
 
 
 def _verify_written(path, snap=None):
@@ -397,6 +474,23 @@ def _verify_written(path, snap=None):
         _sys.exit(1)
 
 
+def _compress():
+    """COMPRESSOR：新寫入的 § 壓成一行 blurb 進 .blurbs.jsonl（fxsearch 用）。
+    LLM 在本機 OmniRoute，離線是常態 → 失敗一律吞掉，絕不阻斷寫入。
+    逃生門：FIXINDEX_NO_BLURB=1。"""
+    if os.environ.get('FIXINDEX_NO_BLURB') == '1':
+        return
+    blurb = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fxblurb.py')
+    try:
+        subprocess.run(['python3', blurb, '--limit=5'],
+                       env={**os.environ, 'FIXINDEX_DIR': FIXINDEX_DIR,
+                            'FIXINDEX_NO_BLURB': '1'},
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=45)
+    except Exception:
+        pass   # ponytail: 壓縮是加分項，不是寫入前提
+
+
 def _git_commit_push(paths):
     """Thin wrapper over fxsync.push — 維持 fxauto 既有 JSON 契約。
 
@@ -423,9 +517,10 @@ def _pull_first_if_repo():
 
 
 def build_entry_insight(fid, title, context, insight, implication, revisit, slug,
-                        queries, tags=None, detail=''):
+                        queries, tags=None, detail='', rule=''):
     """Insight 條目 scaffold：frontmatter 帶 `type: insight`，symptoms=QUERIES（未來查詢句），
-    body §1 Context / §2 Insight / §3 Implication / §4 Revisit-when。"""
+    body §1 Context / §2 Insight / §3 Implication / §4 Revisit-when。rule (RULE:)
+    寫進 body 供 grep / fxsearch 檢索。"""
     parts = []
     parts.append('---')
     parts.append(f'id: "{fid}"')
@@ -460,6 +555,9 @@ def build_entry_insight(fid, title, context, insight, implication, revisit, slug
     parts.append('## §4 Revisit-when')
     parts.append('')
     parts.append(revisit)
+    if rule and rule.strip():
+        parts.append('')
+        parts.append(f'**Rule:** {rule.strip()}')
     if detail:
         parts.append('')
         parts.append('## §5 詳情')
@@ -614,10 +712,29 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
             payload.update(_git_commit_push(paths))
         return payload, paths
 
+    # LINKER：BM25 找最相關 insight 條目 → append，不開新檔。
+    rel = find_related(title, 'insight')
+    if rel:
+        ref_id, ref_score = rel
+        ref_path = _path_for_id(ref_id)
+        if ref_path:
+            snap, secn = _append_to_file_insight(ref_path, title, context, insight,
+                                                 impl, revisit, queries, detail)
+            _run_index('re-index')
+            payload = {'etype': 'insight', 'linked': ref_id, 'coverage': round(ref_score, 3),
+                       'appended': os.path.basename(ref_path), 'section': secn,
+                       'dedup': False, 'undo': snap}
+            paths = [ref_path, _resolve_index_file()]
+            if not defer_commit:
+                payload.update(_git_commit_push(paths))
+            return payload, paths
+
+    # INTAKE gate：LINKER 未收容、要開新 insight 條目時才強制回答可泛化。
+    _intake_gate(ini.get('rule', ''))
     fid = next_id()
     slug = slugify(title, fallback='insight')
     entry = build_entry_insight(fid, title, context, insight, impl, revisit,
-                                slug, queries, tags, detail)
+                                slug, queries, tags, detail, rule=ini.get('rule', ''))
     os.makedirs(FIXINDEX_DIR, exist_ok=True)
     path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
     with open(path, 'w') as f:
@@ -629,7 +746,6 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
     if not defer_commit:
         payload.update(_git_commit_push(paths))
     return payload, paths
-
 
 def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commit=False):
     """Defect 寫入管線（shadow / dedup-supersede / domain-append / new-file），
@@ -709,9 +825,29 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
             if not defer_commit:
                 payload.update(_git_commit_push(paths))
             return payload, paths
+        # LINKER：BM25 找最相關既有條目。「被判定為已知」→ append 當證據，不開新檔。
+        rel = find_related(title, 'defect')
+        if rel:
+            ref_id, ref_score = rel
+            ref_path = _path_for_id(ref_id)
+            if ref_path:
+                entry_meta = {'evidence': evidence} if (evidence and verify.strip()) else {}
+                snap, sec = _append_to_file(ref_path, title, symps, root, fix, verify,
+                                            detail, trust=entry_meta)
+                _run_index('re-index')
+                payload = {'linked': ref_id, 'coverage': round(ref_score, 3),
+                           'appended': os.path.basename(ref_path), 'section': sec,
+                           'dedup': False, 'undo': snap}
+                paths = [ref_path, _resolve_index_file()]
+                if not defer_commit:
+                    payload.update(_git_commit_push(paths))
+                return payload, paths
+        # INTAKE gate：LINKER 未收容、真正要開新條目前才強制回答可泛化。
+        _intake_gate(fields.get('rule', ''))
         fid = next_id()
         slug = slugify(title)
-        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail, evidence)
+        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
+                            evidence, rule=fields.get('rule', ''))
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
         path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
         with open(path, 'w') as f:
@@ -783,6 +919,10 @@ def main():
                 fields.setdefault(k, v)
             elif k in ('context', 'insight', 'implication', 'revisit-when', 'queries', 'type'):
                 insight_fields[k] = v
+            elif k == 'rule':
+                # RULE: 泛化規則 — defect 與 insight 共用
+                fields['rule'] = v
+                insight_fields['rule'] = v
             else:
                 detail_lines.append(raw)
         elif re.match(r'^[A-Z][A-Z-]*:\s*$', st):

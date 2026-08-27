@@ -163,6 +163,7 @@ Commands:
                                （verified 需 evidence+date；stale/blocked/superseded 需 --reason，不執行任何命令）
   fixindex outcome <ID#N> <helpful|irrelevant|failed>   匿名 outcome counter（v1 只顯示不調分）
   fixindex audit [ID#N|ID|--all] [--json]  section trust 檢查；0=clean 1=品質 2=用法
+  fixindex prune [--json]      唯讀遺忘候選報告：no Rule + 單 Section + active（不刪檔）
   fixindex fi                 一行 pipe 記 defect/經驗（自動 dedup→append→建新→commit）
                                `printf 'SYMPTOM: …\\nFIX: …' | fixindex fi`（自由文字也行）
                                混合輸入: SYMPTOM+INSIGHT 同 pipe → 拆兩筆(defect+insight)、單一 commit
@@ -1390,6 +1391,11 @@ cmd_audit() {
   exit $rc
 }
 
+cmd_prune() {
+  # usage: fixindex prune [--json]
+  python3 "$FX_DIR/fxprune.py" "$@"
+}
+
 cmd_auto() {
   # Capture ONE experience from stdin (KEY: value lines: SYMPTOM/ROOT/FIX/VERIFY)
   # or from --symptom/--fix/--tags flags (non-interactive one-shot).
@@ -1524,6 +1530,7 @@ main() {
     mark)      warn_if_default_dir; sync_pull; cmd_mark "$@" ;;
     outcome)   warn_if_default_dir; sync_pull; cmd_outcome "$@" ;;
     audit)     sync_pull_soft; cmd_audit "$@" ;;
+    prune)     sync_pull_soft; cmd_prune "$@" ;;
     fi)        warn_if_default_dir; sync_pull; cmd_fi "$@" ;;
     auto)      warn_if_default_dir; sync_pull; cmd_auto "$@" ;;
     help|-h|--help) cmd_help ;;

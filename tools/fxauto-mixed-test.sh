@@ -41,6 +41,7 @@ VERIFY: tools/fxauto-mixed-test.sh
 INSIGHT: 遷徙結論
 IMPLICATION: advisory 退化
 QUERIES: 混合, 兩拆分
+RULE: 混合管道先按 KEY 三態分流再各自接線，別在 main 下手寫整段
 "
 
 # ---------- A: shadow 混合 → 無寫出、雙 preview ----------
@@ -88,14 +89,14 @@ rm -rf "$B"
 # ---------- C 回歸純 defect / 純 insight ----------
 newlib
 C=$NL
-printf 'SYMPTOM: 純 defect ROOT\nROOT: r\nFIX: f\nVERIFY: v\n' | FIXINDEX_DIR="$C/fixes" FIXINDEX_INDEX="$C/FIX-INDEX.md" FIXINDEX_STRICT_DIR=1 "$PY" "$FXAUTO" --commit > "$C/o.jsonl" 2>/dev/null
+printf 'SYMPTOM: 純 defect ROOT\nROOT: r\nFIX: f\nVERIFY: v\nRULE: 純 defect 案例的泛化規則\n' | FIXINDEX_DIR="$C/fixes" FIXINDEX_INDEX="$C/FIX-INDEX.md" FIXINDEX_STRICT_DIR=1 "$PY" "$FXAUTO" --commit > "$C/o.jsonl" 2>/dev/null
 hasm=$(grep -c '"mixed"' "$C/o.jsonl")
 [ "$(cnt "$C")" -eq 1 ] && [ "$hasm" -eq 0 ] && ok "C 純 defect —— 1 檔、無 mixed 鍵" || ng "C 純 defect (cnt=$(cnt "$C") mixed=$hasm)"
 rm -rf "$C"
 
 newlib
 C2=$NL
-printf 'CONTEXT: c\nINSIGHT: i\nQUERIES: q\n' | FIXINDEX_DIR="$C2/fixes" FIXINDEX_INDEX="$C2/FIX-INDEX.md" FIXINDEX_STRICT_DIR=1 "$PY" "$FXAUTO" --commit > "$C2/o.jsonl" 2>/dev/null
+printf 'CONTEXT: c\nINSIGHT: i\nQUERIES: q\nRULE: 純 insight 案例的泛化規則\n' | FIXINDEX_DIR="$C2/fixes" FIXINDEX_INDEX="$C2/FIX-INDEX.md" FIXINDEX_STRICT_DIR=1 "$PY" "$FXAUTO" --commit > "$C2/o.jsonl" 2>/dev/null
 hasm=$(printf '%s' "$(tail -1 "$C2/o.jsonl")" | grep -c 'mixed')
 [ "$(cnt "$C2")" -eq 1 ] && [ "$hasm" -eq 0 ] && ok "C 純 insight —— 1 檔、無 mixed" || ng "C 純 insight (cnt=$(cnt "$C2") mixed=$hasm)"
 rm -rf "$C2"
@@ -103,7 +104,7 @@ rm -rf "$C2"
 # ---------- D 邊界: 裸 `SYMPTOM: 空值` + INSIGHT → 純 insight 恰 1 檔 ----------
 newlib
 D=$NL
-printf 'SYMPTOM:\nROOT: r\nCONTEXT: c\nINSIGHT: i\nQUERIES: q\n' | FIXINDEX_DIR="$D/fixes" FIXINDEX_INDEX="$D/FIX-INDEX.md" FIXINDEX_STRICT_DIR=1 "$PY" "$FXAUTO" --commit > "$D/o.jsonl" 2>/dev/null
+printf 'SYMPTOM:\nROOT: r\nCONTEXT: c\nINSIGHT: i\nQUERIES: q\nRULE: D 邊界案例的泛化規則\n' | FIXINDEX_DIR="$D/fixes" FIXINDEX_INDEX="$D/FIX-INDEX.md" FIXINDEX_STRICT_DIR=1 "$PY" "$FXAUTO" --commit > "$D/o.jsonl" 2>/dev/null
 printf '%s' "$(tail -1 "$D/o.jsonl")" | "$PY" -c '
 import sys,json
 j=json.load(sys.stdin)
