@@ -1091,7 +1091,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() trunc_list=() vestigial_list=() junk_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() vestigial_list=() junk_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -1143,13 +1143,11 @@ _cmd_doctor_check() {
       fi
     fi
 
-    # Check 7: 截斷 title（≥78 字且結尾不是 …/。/）—— 報告用，不自動修
-    if [[ -n "$title" && "$title" != "TODO" && ${#title} -ge 78 ]]; then
-      local tlast="${title: -1}"
-      if [[ "$tlast" != "…" && "$tlast" != "。" && "$tlast" != ")" ]]; then
-        trunc_list+=("$fname (${#title} chars: ${title:0:40}…)")
-      fi
-    fi
+    # Check 7: 退役（2026-08-28）。原本以「title ≥78 字且結尾非 …」當截斷指紋，
+    # 是為了撈 fxauto 舊版 _derive_title 切在句中的殘骸。fde0a7f 已根治產生器：
+    # 現在 limit=60 且一律補 `…`（fxauto.py:203-206 的正向指紋）。
+    # 因此 ≥78 字的 title 只可能是人手寫的完整標題 —— 實測 33/33 全是誤報。
+    # 留著只會讓 doctor 每次都吐 33 行雜訊，訓練人忽略 doctor 輸出。
 
     # Check 8: vestigial tag（tags 含 auto/shadow）—— 可自動修
     if _has_vestigial_tag "$f"; then
@@ -1157,10 +1155,12 @@ _cmd_doctor_check() {
     fi
 
     # Check 9: E2E 汙染 slug 偵測（warning only，不影響 exit；B5）
+    # 光看 slug 名會誤傷真條目（omlx 是真專案名，0002 有 531 行實內容）。
+    # 真 E2E 殘骸是空殼，所以再加一道內容閘：只有小檔才算 junk。
     local slug="${base#?????}"
     case "$slug" in
       test|edge|gateway|alpha|beta|offline|nosync|common|omlx|t1)
-        junk_list+=("$fname") ;;
+        if [[ $(wc -l < "$f") -lt 40 ]]; then junk_list+=("$fname"); fi ;;
     esac
   done
 
@@ -1213,12 +1213,6 @@ _cmd_doctor_check() {
     has_issues=true
     echo "missing sections (${#missing_list[@]} files):"
     printf '  %s\n' "${missing_list[@]}"
-  fi
-
-  if [[ ${#trunc_list[@]} -gt 0 ]]; then
-    has_issues=true
-    echo "truncated titles (${#trunc_list[@]} files, report only):"
-    printf '  %s\n' "${trunc_list[@]}"
   fi
 
   if [[ ${#vestigial_list[@]} -gt 0 ]]; then
