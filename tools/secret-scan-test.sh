@@ -1,8 +1,9 @@
 #!/bin/bash
 # secret-scan-test.sh — secret-scan.sh 端到端測試
 # 自包含: 全部在 mktemp 臨時 repo 執行, 不污染任何真實 repo。
-# 8 條: 1)乾淨 2)TG token擋 3)GH PAT擋 4)sk-誤報1不擋 5)hex誤報2不擋
-#       6)no-verify 繞pre-commit但push擋 7)SECRET_SCAN_OFF放行 8)fail-closed擋
+# 10 條: 1)乾淨 2)TG token擋 3)GH PAT擋 4)sk-誤報1不擋 5)hex誤報2不擋
+#        6)no-verify 繞pre-commit但push擋 7)SECRET_SCAN_OFF放行 8)fail-closed擋
+#        9)歷史leak在別ref,乾淨新分支首次push應過(範圍控制) 10)新分支自身leak仍擋
 # 全過印 ALL PASS; 任一失敗印 FAILURE 且 exit 1。
 # 假憑證用 python 隨機生成語境+高熵, 不寫字面值(FIX repo 自我誤報防線)。
 
@@ -123,9 +124,51 @@ else
 fi
 rm -rf "$D"
 
+### T9 歷史 leak 在別 ref → 乾淨新分支首次 push 應通過（範圍控制回歸）
+D=$(mktemp -d); newrepo "$D"
+install_hook "$D" pre-commit; install_hook "$D" pre-push
+BARE=$(mktemp -d); git init -q --bare "$BARE" 2>/dev/null
+git -C "$D" remote add origin "$BARE"
+git -C "$D" push -q origin HEAD:main >/dev/null 2>&1           # origin/main = 乾淨 base
+git -C "$D" checkout -q -b leak-branch                          # 從 base 開 leak 分支
+gen_tg > "$D/leak-legacy.py"; git -C "$D" add leak-legacy.py
+git -C "$D" commit -qm t9legacy --no-verify >/dev/null 2>&1    # 製造含 leak 的 commit
+git -C "$D" push -q origin HEAD:legacy-backup --no-verify >/dev/null 2>&1  # 歷史 leak 在別的 ref
+git -C "$D" checkout -q main                                    # 回乾淨 base
+git -C "$D" checkout -q -b feature                              # 從 base(乾淨) 開新分支
+printf '# clean\n' > "$D/clean.py"; git -C "$D" add clean.py
+git -C "$D" commit -qm t9clean >/dev/null 2>&1                  # pre-commit 應過
+git -C "$D" push origin HEAD:feature >/dev/null 2>&1            # 新分支首次 push, rsha=0 → merge-base range
+rc=$?
+# 退化檢查: wrapper 若含 --all 則應擋(轉紅)。此處只做靜態快速信號, 端到端由上面 push 判定。
+if grep -v '^[[:space:]]*#' "$WRAPPER" | grep -q -- '--all'; then
+    ng "T9 regression: --all present in wrapper"
+else
+    [ "$rc" -eq 0 ] && ok "T9 clean new branch push passes (history leak elsewhere)" || ng "T9 clean new branch push passes (history leak elsewhere)"
+fi
+rm -rf "$D" "$BARE"
+
+### T10 新分支自身新增 leak → 首次 push 應被擋
+D=$(mktemp -d); newrepo "$D"
+install_hook "$D" pre-commit; install_hook "$D" pre-push
+BARE=$(mktemp -d); git init -q --bare "$BARE" 2>/dev/null
+git -C "$D" remote add origin "$BARE"
+git -C "$D" push -q origin HEAD:main >/dev/null 2>&1
+git -C "$D" checkout -q -b leak-branch2
+gen_tg > "$D/leak-legacy2.py"; git -C "$D" add leak-legacy2.py
+git -C "$D" commit -qm t10legacy --no-verify >/dev/null 2>&1
+git -C "$D" push -q origin HEAD:legacy-backup --no-verify >/dev/null 2>&1
+git -C "$D" checkout -q main
+git -C "$D" checkout -q -b feature2                            # 從 base 開新分支
+gen_tg > "$D/leak-new.py"; git -C "$D" add leak-new.py
+git -C "$D" commit -qm t10new --no-verify >/dev/null 2>&1      # 繞 pre-commit 製造新分支自身 leak
+git -C "$D" push origin HEAD:feature2 >/dev/null 2>&1           # 新分支首次 push 應被擋
+[ $? -ne 0 ] && ok "T10 new branch own leak blocked" || ng "T10 new branch own leak blocked"
+rm -rf "$D" "$BARE"
+
 echo ""
 if [ "$FAIL_CT" -eq 0 ]; then
-    echo "ALL PASS ($PASS_CT/8)"
+    echo "ALL PASS ($PASS_CT/10)"
     exit 0
 else
     echo "FAILURE ($PASS_CT pass, $FAIL_CT fail)"
