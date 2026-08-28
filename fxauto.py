@@ -202,8 +202,9 @@ def find_domain_file_auto(title, symps, etype='defect'):
 
 def _derive_title(text, limit=60):
     """從首個 symptom 推標題：先找句號類終止符（。．.！？ 是最理想切點），
-    找不到才退回次級斷句符（；;，,、（(【—）；兩輪都無邊界才退回硬切，
-    並一律補 `…`（讓截斷肉眼可辨，也給 doctor 正向指紋）。"""
+    找不到才退回次級斷句符（；;，,、（(【—）；兩輪都無邊界才退回硬切。
+    **只要有截斷就補 `…`**（讓截斷肉眼可辨，也給 doctor 正向指紋）——
+    原本只有硬切那條路徑補，邊界切不補，導致截斷標題跟完整標題長得一樣。"""
     text = str(text).strip()
     if not text:
         return 'untitled'
@@ -211,12 +212,25 @@ def _derive_title(text, limit=60):
         return text
     # 句號類是最理想的切點，必須優先；次級（頓號/逗號/括號/破折號）才是退路。
     # 原本只有次級集合，導致標題切在句中而非句末。
-    cuts_strong = '。．.！!？?'
+    # 半形 `.` 只有在後面接空白或字串結尾時才算句號。否則會切在
+    # 127.0.0.1 / Darwin 25.5 / origin/main..branch / settings.json 這種
+    # 路徑、IP、版號、檔名的點上——實測產出「判定本地服務（127.0.0」這種標題。
+    # 全形 。．！？ 不會出現在識別碼裡，維持無條件強切。
+    cuts_strong = '。．！!？?'
     cuts_weak = '；;，,、（(【—'
+
+    def _is_strong(i):
+        c = text[i]
+        if c in cuts_strong:
+            return True
+        if c == '.':
+            return i + 1 >= len(text) or text[i + 1].isspace()
+        return False
+
     # 第一輪：句號類，從後往前找 ≤limit 的最長切點
     best = -1
     for i in range(limit - 1, -1, -1):
-        if text[i] in cuts_strong:
+        if _is_strong(i):
             best = i
             break
     # 第二輪：次級斷句符（僅當第一輪沒找到）
@@ -226,7 +240,9 @@ def _derive_title(text, limit=60):
                 best = i
                 break
     if best >= 0:
-        return text[:best + 1].rstrip('；;，,、（(【—-–—。．.！!？? ')
+        cut = text[:best + 1].rstrip('；;，,、（(【—-–—。．.！!？? ')
+        # 有丟東西就補 … —— 邊界切以前不補，截斷標題因此無指紋可辨（見上方 docstring）
+        return cut if cut == text else cut + '…'
     # 無邊界 → 硬切補 …
     return text[:limit] + '…'
 
