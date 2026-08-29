@@ -14,7 +14,12 @@
 # 重要：不得掛進任何 git hook。它掃全歷史，掛上去就是重演 R2 剛修掉
 # 的「每次 push 掃全歷史」病。它是手動 / 排程稽核工具。
 
-CONFIG="/Users/51mini/dev/fixindex/tools/gitleaks.toml"
+# 路徑一律走環境變數，不硬編。硬編會把「本機有哪些 repo、掛在哪」寫進
+# 這個 public repo；那不是憑證，但也沒有必要公開，而 public repo 推出去
+# 之後實務上收不回來（清歷史要 force push + 斷既有 clone，且 GitHub 快取
+# 短期仍取得到舊物件）。
+REPO_ROOT="${FIXINDEX_HOME:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
+CONFIG="${FIXINDEX_GITLEAKS_CONFIG:-$REPO_ROOT/tools/gitleaks.toml}"
 REDACT=100
 OVERALL=0
 
@@ -78,8 +83,21 @@ scan_repo() {  # $1 = repo 絕對路徑  $2 = label
     rm -f "$hist" "$headr"
 }
 
-scan_repo "/Users/51mini/dev/fixindex"                  "fixindex (public)"
-scan_repo "/Users/51mini/.claude/projects/-Users-51mini/memory" "fixindex-log (private)"
+# 引擎 repo：預設就是本腳本所在的 repo。
+scan_repo "$REPO_ROOT" "engine repo"
+
+# runbook 資料庫：位置因人而異，且多半是私有 repo —— 不給預設值。
+# FIXINDEX_DIR 指向 fixes/，稽核對象是它的上一層（git repo 根）。
+LOG_REPO="${FIXINDEX_LOG_REPO:-}"
+if [ -z "$LOG_REPO" ] && [ -n "$FIXINDEX_DIR" ]; then
+    LOG_REPO=$(CDPATH= cd -- "$FIXINDEX_DIR/.." 2>/dev/null && pwd)
+fi
+if [ -n "$LOG_REPO" ] && [ -d "$LOG_REPO/.git" ]; then
+    scan_repo "$LOG_REPO" "runbook log repo"
+else
+    echo ""
+    echo "跳過 runbook log repo：未設 FIXINDEX_LOG_REPO，且 FIXINDEX_DIR 未指向 git repo"
+fi
 
 echo ""
 if [ "$OVERALL" -eq 0 ]; then

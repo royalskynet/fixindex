@@ -7,7 +7,7 @@
 # 全過印 ALL PASS; 任一失敗印 FAILURE 且 exit 1。
 # 假憑證用 python 隨機生成語境+高熵, 不寫字面值(FIX repo 自我誤報防線)。
 
-WRAPPER="/Users/51mini/dev/fixindex/tools/secret-scan.sh"
+WRAPPER="${FIXINDEX_HOME:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}/tools/secret-scan.sh"
 PASS_CT=0; FAIL_CT=0
 
 ok()   { PASS_CT=$((PASS_CT+1)); printf "PASS  %s\n" "$1"; }

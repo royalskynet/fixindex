@@ -7,7 +7,7 @@
 # 引擎: gitleaks (不自刻 regex), config 指向同目錄 gitleaks.toml。
 # --redact=100 是硬性要求: guard.js 攔憑證外送, 掃描器印命中字串 = 自己洩漏。
 
-CONFIG="/Users/51mini/dev/fixindex/tools/gitleaks.toml"
+CONFIG="${FIXINDEX_GITLEAKS_CONFIG:-${FIXINDEX_HOME:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}/tools/gitleaks.toml}"
 TARGET="."
 
 # --- 逃生門 (第一個判斷) ---
