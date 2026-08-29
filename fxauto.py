@@ -632,6 +632,28 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     return snap, n
 
 
+# §6a: repeat_eval 訊號的落檔 sink。原本這條提示只印一行 stderr 就丟掉，
+# 沒有任何下游消費者——它其實是「這類問題重複夠多次了、該編譯成一條規則」的
+# 現成觸發器，落檔才有人能讀回來。
+#
+# 路徑一律走 FIXINDEX_EVENT_LOG，未設就 no-op：本 repo 是 public 的，
+# 不得寫死任何私有路徑。輔助訊號而已，寫檔失敗一律吞掉，不能讓主流程掛掉。
+def _emit_repeat_eval_event(hint):
+    path = os.environ.get('FIXINDEX_EVENT_LOG')
+    if not path or not hint:
+        return
+    try:
+        m = re.match(r'FIXINDEX_REPEAT_EVAL key=(\S+) reason=(\S+) recommendation=(\S+)', hint)
+        if not m:
+            return
+        rec = {'ts': datetime.datetime.now().isoformat(timespec='seconds'),
+               'key': m.group(1), 'reason': m.group(2), 'recommendation': m.group(3)}
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
+
 # §6: repeat → eval 提示。只在寫入路徑（fi/auto committed）觸發；最多一則。
 def repeat_eval_hint(path, title, symps, new_secn=None):
     """Return a hint line
@@ -675,6 +697,9 @@ def repeat_eval_hint(path, title, symps, new_secn=None):
             _, _, outcome, _ = fxmeta.section_summary(body)
             if outcome.get('failed', 0) >= 2:
                 first_reason = f'FIXINDEX_REPEAT_EVAL key={base[:4]}#{num} reason=failed_outcome recommendation=health_check'
+    # 在 return 前發，不是在三個呼叫點各加一次——少三處要同步的地方，
+    # 未來新增呼叫點也自動涵蓋。判定邏輯與 stderr 輸出完全沒動。
+    _emit_repeat_eval_event(first_reason)
     return first_reason
 
 
