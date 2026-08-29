@@ -38,7 +38,14 @@ PY
 }
 
 newrepo() { # $1=dir, 建 base commit
-    mkdir -p "$1"; cd "$1" || return 1
+    # 空路徑防護：mktemp -d 失敗時 $1 是空字串，而 `cd ""` 回傳 0 並留在原地，
+    # 於是底下的 git init / git config user.* / git commit 全部落到呼叫者的真 repo。
+    # 實測（沙箱擋 mkdtemp）會在真 repo 留下 base commit、四條測試分支，
+    # 並把 user.name/email 改成 t/t@t，之後該 repo 的 commit 全掛在 t 名下。
+    # 呼叫端不檢查回傳值，所以這裡必須 exit 而非 return。
+    [ -n "$1" ] || { echo "FATAL: newrepo 收到空路徑（mktemp -d 失敗？）—— 拒絕在當前目錄操作" >&2; exit 1; }
+    mkdir -p "$1" || exit 1
+    cd "$1" || exit 1
     git init -q
     git config user.email t@t; git config user.name t
     echo ok > base.txt; git add base.txt; git commit -qm base
