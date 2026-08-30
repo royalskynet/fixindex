@@ -274,7 +274,9 @@ def push(fixdir, paths=None, message=None):
     if rc != 0:
         return {'committed': None, 'pushed': False, 'kind': 'fatal',
                 'detail': f'git add: {(err or out).strip()[:200]}', 'pending_push': None}
-    rc, _, _ = _run(['git', '-C', root, 'diff', '--cached', '--quiet'])
+    # 兩處都必須帶 pathspec：不帶的話 diff --cached 看的是整個 index、commit 收的也是
+    # 整個 index，paths-scoped 就只剩 add 那一步有效，等於沒擋（0623）。
+    rc, _, _ = _run(['git', '-C', root, 'diff', '--cached', '--quiet', '--'] + rel)
     if rc == 0:
         return {'committed': None, 'pushed': False, 'kind': 'noop',
                 'detail': 'no-changes', 'pending_push': None}
@@ -283,6 +285,17 @@ def push(fixdir, paths=None, message=None):
     cm = ['git', '-C', root, 'commit', '-m', cmsg]
     for a in CO_AUTHORS:
         cm += ['-m', f'Co-Authored-By: {a}']
+    # 改名補償：pathspec 只給新路徑時，舊路徑的刪除會留在 index，HEAD 同時存在新舊兩份。
+    # 撈出「新路徑在 rel 內」的 staged rename，把舊路徑一起納入 pathspec。
+    spec = list(rel)
+    rc_r, out_r, _ = _run(['git', '-C', root, 'diff', '--cached', '--name-status', '-M'])
+    if rc_r == 0:
+        relset = set(rel)
+        for line in (out_r or '').splitlines():
+            f = line.split('\t')
+            if len(f) == 3 and f[0].startswith('R') and f[2] in relset and f[1] not in relset:
+                spec.append(f[1])
+    cm += ['--'] + spec
     rc, out, err = _run(cm)
     if rc != 0:
         return {'committed': None, 'pushed': False, 'kind': 'fatal',
