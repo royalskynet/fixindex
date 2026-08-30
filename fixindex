@@ -1091,7 +1091,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() vestigial_list=() junk_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() vestigial_list=() junk_list=() trunc_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -1195,6 +1195,8 @@ for fp in glob.glob(os.path.join(sys.argv[1], '[0-9]*.md')):
         fm, _ = fxmeta.parse_frontmatter_full(open(fp).read())
     except Exception:
         continue
+    if str(fm.get('domain_bucket')).lower() == 'true':
+        continue
     b[str(fm.get('type') or 'defect')][slug.split('-')[0]].append(n)
 for et, d in sorted(b.items()):
     for tok, names in sorted(d.items()):
@@ -1208,6 +1210,12 @@ for et, d in sorted(b.items()):
 for fp in sorted(glob.glob(os.path.join(sys.argv[1], '[0-9]*.md'))):
     n = os.path.basename(fp)[:-3]
     if '-' in n and '-' not in n.split('-', 1)[1]:
+        try:
+            fm, _ = fxmeta.parse_frontmatter_full(open(fp).read())
+            if str(fm.get('domain_bucket')).lower() == 'true':
+                continue
+        except Exception:
+            pass
         print(f"{n}  (單詞 slug，走 ① 精確匹配；若非刻意的領域桶請改名)")
 PYEOF
   )
