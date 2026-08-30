@@ -1003,12 +1003,15 @@ def main():
         if mode == '--commit':
             all_paths = list(dict.fromkeys(d_paths + i_paths))
             out.update(_git_commit_push(all_paths))
+            _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
         print(json.dumps(out, ensure_ascii=False))
         if out.get('git_error'):
             sys.exit(1)
         return
     elif has_insight_key:
         payload, _ = _pipeline_insight(insight_fields, detail, mode, tags_arg)
+        if mode == '--commit':
+            _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
         print(json.dumps(payload, ensure_ascii=False))
         if payload.get('git_error'):
             sys.exit(1)
@@ -1041,6 +1044,8 @@ def main():
         sys.exit(1)
 
     payload, _ = _pipeline_defect(fields, detail, mode, tags_arg, title_override)
+    if mode == '--commit':
+        _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
     print(json.dumps(payload, ensure_ascii=False))
     if payload.get('git_error'):
         sys.exit(1)
