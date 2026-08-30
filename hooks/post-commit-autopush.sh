@@ -30,9 +30,9 @@ GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" || GIT_DIR="$ROOT/.git"
 # 無 upstream（local-only / feature 分支）→ 跳過
 git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || exit 0
 
-if ! git push -q 2>/tmp/fixindex-autopush.err; then
-  echo "fixindex post-commit: push 失敗（warning；commit 已保留，稍後手動 push）: $(head -c 200 /tmp/fixindex-autopush.err)" >&2
-  rm -f /tmp/fixindex-autopush.err
+if ! git push -q 2>"${TMPDIR:-/tmp}/fixindex-autopush.err"; then
+  echo "fixindex post-commit: push 失敗（warning；commit 已保留，稍後手動 push）: $(head -c 200 "${TMPDIR:-/tmp}/fixindex-autopush.err")" >&2
+  rm -f "${TMPDIR:-/tmp}/fixindex-autopush.err"
   exit 0
 fi
-rm -f /tmp/fixindex-autopush.err
+rm -f "${TMPDIR:-/tmp}/fixindex-autopush.err"

@@ -11,6 +11,8 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 """
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
+import fcntl, time
+from contextlib import contextmanager
 import fxmeta
 import fxsync
 
@@ -60,12 +62,63 @@ def _intake_gate(rule):
     sys.exit(1)
 
 
-def next_id():
+def _scan_next_id():
+    """純掃描：取現有最大 ID + 1（不鎖，呼叫端須已持有 id_lock）。"""
     files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
     if not files:
         return '0001'
     last = os.path.basename(files[-1])[:4]
     return f'{int(last) + 1:04d}'
+
+
+ID_LOCK_TIMEOUT = float(os.environ.get('FIXINDEX_ID_LOCK_TIMEOUT', '5'))
+
+
+class IdLockTimeout(Exception):
+    """配號鎖等待逾時——另一寫行程持鎖過久，拒絕無鎖配號（fail loud）。"""
+
+
+@contextmanager
+def id_lock(timeout=ID_LOCK_TIMEOUT):
+    """配號＋寫入的檔案鎖（fcntl.flock on $FIXINDEX_DIR/.id.lock，走既有 FIXINDEX_DIR 不寫死路徑）。
+
+    - timeout（預設 5s）到 → 拋 IdLockTimeout（fail loud，不退回無鎖配號）
+    - 鎖在例外路徑也會釋放（finally；fcntl.flock 與檔案描述子都關）
+    """
+    lock_path = os.path.join(FIXINDEX_DIR, '.id.lock')
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise IdLockTimeout(
+                        f'配號鎖等待逾時 {timeout:.0f}s（{lock_path}）：'
+                        '另一寫行程持鎖過久，拒絕在無鎖下配號')
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def next_id(_locked=True):
+    """掃描取 max+1。
+
+    _locked=True（預設）：獨自呼叫時自行持鎖，適合 shadow/preview 等不寫入路徑。
+    寫入路徑必須用 `with id_lock(): fid = next_id(_locked=False)` 把
+    「配號→建檔」包在同一把鎖內，否則兩行程會在計算與寫入之間看到同一
+    個 max，配出重複 ID（0616 競態）。
+    """
+    if _locked:
+        with id_lock():
+            return _scan_next_id()
+    return _scan_next_id()
 
 
 # LINKER：BM25 找候選 → token 覆蓋率確認。「被判定為已知」→ append 當證據，不開新檔。
@@ -747,17 +800,18 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
 
     if dup:
         old_id = dup[0]
-        new_id = next_id()
-        slug = slugify(title, fallback='insight')
-        entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
-                                    slug, queries, tags, detail)
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        import glob as _g
-        old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
-        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+        with id_lock():
+            new_id = next_id(_locked=False)
+            slug = slugify(title, fallback='insight')
+            entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
+                                        slug, queries, tags, detail)
+            os.makedirs(FIXINDEX_DIR, exist_ok=True)
+            import glob as _g
+            old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
+            path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
+            with open(path, 'w') as f:
+                f.write(entry)
+            _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'etype': 'insight', 'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
@@ -796,15 +850,16 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
 
     # INTAKE gate：LINKER 未收容、要開新 insight 條目時才強制回答可泛化。
     _intake_gate(ini.get('rule', ''))
-    fid = next_id()
-    slug = slugify(title, fallback='insight')
-    entry = build_entry_insight(fid, title, context, insight, impl, revisit,
-                                slug, queries, tags, detail, rule=ini.get('rule', ''))
-    os.makedirs(FIXINDEX_DIR, exist_ok=True)
-    path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-    with open(path, 'w') as f:
-        f.write(entry)
-    _verify_written(path)   # 2d: 寫完即驗
+    with id_lock():
+        fid = next_id(_locked=False)
+        slug = slugify(title, fallback='insight')
+        entry = build_entry_insight(fid, title, context, insight, impl, revisit,
+                                    slug, queries, tags, detail, rule=ini.get('rule', ''))
+        os.makedirs(FIXINDEX_DIR, exist_ok=True)
+        path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
+        with open(path, 'w') as f:
+            f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗
     _run_index('re-index')
     payload = {'etype': 'insight', 'created': path, 'dedup': False}
     paths = [path, _resolve_index_file()]
@@ -850,17 +905,18 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
     if dup:
         # 去個案化：取代舊條目, 不創重複檔
         old_id = dup[0]
-        new_id = next_id()
-        slug = slugify(title)
-        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
-        import glob as _g
-        old_files = sorted(_g.glob(old_path))
-        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+        with id_lock():
+            new_id = next_id(_locked=False)
+            slug = slugify(title)
+            entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
+            os.makedirs(FIXINDEX_DIR, exist_ok=True)
+            old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
+            import glob as _g
+            old_files = sorted(_g.glob(old_path))
+            path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
+            with open(path, 'w') as f:
+                f.write(entry)
+            _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
@@ -909,15 +965,16 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
                 return payload, paths
         # INTAKE gate：LINKER 未收容、真正要開新條目前才強制回答可泛化。
         _intake_gate(fields.get('rule', ''))
-        fid = next_id()
-        slug = slugify(title)
-        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
-                            evidence, rule=fields.get('rule', ''))
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗
+        with id_lock():
+            fid = next_id(_locked=False)
+            slug = slugify(title)
+            entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
+                                evidence, rule=fields.get('rule', ''))
+            os.makedirs(FIXINDEX_DIR, exist_ok=True)
+            path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
+            with open(path, 'w') as f:
+                f.write(entry)
+            _verify_written(path)   # 2d: 寫完即驗
         _run_index('re-index')
         payload = {'created': path, 'dedup': False}
         paths = [path, _resolve_index_file()]

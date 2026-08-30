@@ -17,6 +17,8 @@ status: superseded 的。
               判不相關 → 記為 expect_not（真實觀察到的假陽性）。
 
 輸出 JSONL 到 argv[1]（一行一 case，含 bucket 欄位）。
+每筆 case 附品閘證據：overlap（query 對來源條目全文的實際 token 重疊率，四位小數）
+與 gate（pass / skipped_overlap）。
 stdout 印：verbatim=N paraphrase=M negative=K skipped_overlap=S
 """
 import glob
@@ -205,9 +207,14 @@ def main():
     skipped_overlap = 0
 
     # ── verbatim 桶：沿用現行邏輯（金絲雀）──
+    # 品閘證據：overlap 是 query(symptom) 對來源條目全文的實際 token 重疊率
+    # （天然接近 1.0，正是 verbatim 與 paraphrase 兩桶性質不同的證據）。
     vid = 0
     for c in candidates:
         vid += 1
+        qt = set(tokenize(c["symptom"]))
+        ft = set(tokenize(c["full_text"]))
+        ov = round(len(qt & ft) / len(qt), 4) if qt else 0.0
         cases.append({
             "id": f"v{vid:03d}",
             "bucket": "verbatim",
@@ -215,6 +222,8 @@ def main():
             "expect_ids": c["expect_ids"],
             "expect_not": [],
             "src": "auto:verbatim",
+            "overlap": ov,
+            "gate": "pass",
         })
 
     # ── paraphrase 桶：LLM 改寫 + 品閘 ──
@@ -224,6 +233,7 @@ def main():
         if pid >= GOLDEN_PARAPHRASE_N:
             break
         q = ""
+        last_overlap = None
         for _ in range(3):  # 1 次生成 + 最多 2 次重試
             q = paraphrased_query(c["title"], c["symptom"])
             if not q:
@@ -234,6 +244,7 @@ def main():
             if not qt:
                 continue
             ratio = len(qt & ft) / len(qt)
+            last_overlap = round(ratio, 4)
             if ratio < 0.5:
                 break
             q = ""  # 超標 → 重試
@@ -248,6 +259,8 @@ def main():
             "expect_ids": c["expect_ids"],
             "expect_not": [],
             "src": "auto:paraphrase",
+            "overlap": last_overlap if last_overlap is not None else 0.0,
+            "gate": "pass",
         }
         cases.append(pc)
         paraphrase_cases.append((pc, c))
@@ -285,6 +298,8 @@ def main():
                 "expect_ids": [],
                 "expect_not": [rank1],
                 "src": "auto:negative-harvest",
+                "overlap": pc.get("overlap", 0.0),
+                "gate": pc.get("gate", "pass"),
             })
 
     with open(out_path, "w", encoding="utf-8") as f:
