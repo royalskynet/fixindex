@@ -138,7 +138,15 @@ def slugify(text, fallback='untitled'):
         # 因此退回 fallback，並在 stderr 留痕讓呼叫者知道 slug 沒有語意。
         print(f'fixindex: slug normalized to empty, falling back to {fallback!r} (got: {text!r})',
               file=sys.stderr)
-        return fallback
+        out = fallback
+    if '-' not in out:
+        # 單詞 slug 會走 find_domain_file_auto 的 ① 精確匹配分支——該分支無「唯一才採用」
+        # 守衛，只要 title/symptom 出現該詞就命中，於是條目變成恆命中黑洞（0619/0641）。
+        # 中文標題被 NFKD 剝到只剩一個英文詞時最常發生。補一個尾綴讓它降級到 ② prefix
+        # 分支：那條有 len(g2)==1 守衛，且 doctor check 10 會盯。
+        print(f'fixindex: slug {out!r} 是單詞，補成 {out}-note 以免變成路由黑洞；'
+              f'要語意更好的 slug 請用 `fixindex fi <slug> --new`', file=sys.stderr)
+        return f'{out}-note'
     return out
 
 
