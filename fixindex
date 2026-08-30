@@ -1202,7 +1202,13 @@ for et, d in sorted(b.items()):
             continue
         tot = sum(len(v) for dd in b.values() for k, v in dd.items() if k == tok)
         if tot >= 3:
-            print(f"{names[0]}  (type={et} 首詞 '{tok}' 恆命中；全庫同首詞 {tot} 檔)")
+            print(f"{names[0]}  (type={et} 首詞 '{tok}' prefix 恆命中；全庫同首詞 {tot} 檔)")
+# 單詞 slug 更嚴重：走 ① 精確匹配分支，優先權高於 prefix，且不受「唯一才採用」限制。
+# 刻意的領域累積桶（0001-hermes 之類）會被一併列出，屬預期，忽略即可。
+for fp in sorted(glob.glob(os.path.join(sys.argv[1], '[0-9]*.md'))):
+    n = os.path.basename(fp)[:-3]
+    if '-' in n and '-' not in n.split('-', 1)[1]:
+        print(f"{n}  (單詞 slug，走 ① 精確匹配；若非刻意的領域桶請改名)")
 PYEOF
   )
 
