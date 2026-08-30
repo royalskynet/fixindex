@@ -1176,6 +1176,36 @@ _cmd_doctor_check() {
     done <<<"$dup_ids"
   fi
 
+  # Check 10: 路由黑洞（warning only）。find_domain_file_auto 的 ② prefix 分支只在
+  # 「單一檔命中」時直接採用，所以某 type 下若只有一個 slug 以某高頻裸詞開頭，
+  # 該檔就變成恆命中的黑洞，任何提到那個詞的新紀錄都被吸進去（0619）。
+  local holes=()
+  while IFS= read -r line; do [[ -n "$line" ]] && holes+=("$line"); done < <(
+    python3 - "$FIXDIR" "$FX_DIR" <<'PYEOF' 2>/dev/null
+import sys, os, glob, collections
+sys.path.insert(0, sys.argv[2])
+import fxmeta
+b = collections.defaultdict(lambda: collections.defaultdict(list))
+for fp in glob.glob(os.path.join(sys.argv[1], '[0-9]*.md')):
+    n = os.path.basename(fp)[:-3]
+    if '-' not in n:
+        continue
+    _id, slug = n.split('-', 1)
+    try:
+        fm, _ = fxmeta.parse_frontmatter_full(open(fp).read())
+    except Exception:
+        continue
+    b[str(fm.get('type') or 'defect')][slug.split('-')[0]].append(n)
+for et, d in sorted(b.items()):
+    for tok, names in sorted(d.items()):
+        if len(names) != 1 or len(tok) <= 3:
+            continue
+        tot = sum(len(v) for dd in b.values() for k, v in dd.items() if k == tok)
+        if tot >= 3:
+            print(f"{names[0]}  (type={et} 首詞 '{tok}' 恆命中；全庫同首詞 {tot} 檔)")
+PYEOF
+  )
+
   # Report issues
   local has_issues=false
 
@@ -1225,6 +1255,11 @@ _cmd_doctor_check() {
   if [[ ${#junk_list[@]} -gt 0 ]]; then
     echo "⚠ 疑似 E2E 測試 junk（${#junk_list[@]} files，warning only）:"
     printf '  %s\n' "${junk_list[@]}"
+  fi
+
+  if [[ ${#holes[@]} -gt 0 ]]; then
+    echo "⚠ 路由黑洞（${#holes[@]} files，warning only）—— 改 slug 首詞使其特異："
+    printf '  %s\n' "${holes[@]}"
   fi
 
   # Summary
