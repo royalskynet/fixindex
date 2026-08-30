@@ -21,6 +21,11 @@ fi
 if [[ -z "${FIXINDEX_DIR:-}" && -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_DIR=' "$HOME/.zshenv" | head -1 || true)"
 fi
+# T11: FIXINDEX_EVENT_LOG 也要走同一 source（bash/launchd/cron 不載 zshenv，
+# 沒補這段 fxauto 的 repeat_eval 訊號會靜默丟失。比照 FIXINDEX_DIR 既有 eval。）
+if [[ -z "${FIXINDEX_EVENT_LOG:-}" && -f "$HOME/.zshenv" ]]; then
+  eval "$(grep '^export FIXINDEX_EVENT_LOG=' "$HOME/.zshenv" | head -1 || true)"
+fi
 # 0407: FIXINDEX_INDEX 只能沿用「與 FIXINDEX_DIR 同庫」的一維；跨行庫的
 # zshenv 殘留一律視為未提供，下游改走 derived（dirname(FIXINDEX_DIR)）。
 if [[ -n "${FIXINDEX_INDEX:-}" ]]; then
