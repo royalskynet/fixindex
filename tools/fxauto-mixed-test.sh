@@ -2,7 +2,7 @@
 # fxauto-mixed-test.sh — fxauto 混合輸入三態分流端到端測試 (§1e)
 # 純 bash。全過 "ALL PASS (N/M)"; 失過印 FAILURE 且 exit 1。
 
-FXAUTO="/Users/51mini/dev/fixindex/fxauto.py"
+FXAUTO="${FXAUTO:-$(cd "$(dirname "$0")/.." && pwd)/fxauto.py}"
 PY="${PY:-$(command -v python3)}"
 PASS_CT=0; FAIL_CT=0
 ok(){ PASS_CT=$((PASS_CT+1)); printf "PASS  %s\n"   "$1"; }

@@ -116,6 +116,7 @@ related: []
 | `fixindex supersede <old> <new>` | 標記 `<old>` 被 `<new>` 取代，保留檔案。 |
 | `fixindex fi` | 從 stdin 補記一條，自動配對 domain。見「寫入」一節。 |
 | `fixindex insights [<主題>]` | 只回 insight 型條目（無參數 = 列出全部）。見「記 insight」。 |
+| `fixindex rule <ID[#N]> "<lines>"` | 給既有條目補泛化 Rule（預設 #1；已有 Rule → 拒絕覆寫）。 |
 | `fixindex prune [--json]` | 唯讀「遺忘候選」報告：無 `**Rule:**` + 單 § + active 的條目（不刪檔）。 |
 | `fixindex doctor` | 診斷並修復損壞的 frontmatter。 |
 | `fixindex help` | 顯示說明。 |

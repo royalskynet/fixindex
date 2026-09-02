@@ -7,7 +7,7 @@
 # 引擎: gitleaks (不自刻 regex), config 指向同目錄 gitleaks.toml。
 # --redact=100 是硬性要求: guard.js 攔憑證外送, 掃描器印命中字串 = 自己洩漏。
 
-CONFIG="/Users/51mini/dev/fixindex/tools/gitleaks.toml"
+CONFIG="${FIXINDEX_GITLEAKS_CONFIG:-${FIXINDEX_HOME:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}/tools/gitleaks.toml}"
 TARGET="."
 
 # --- 逃生門 (第一個判斷) ---
@@ -44,15 +44,20 @@ case "$MODE" in
         if [ "$lsha" = "0000000000000000000000000000000000000000" ]; then
             continue
         fi
-        # range: 新分支(rsha 全零)→ 單點 lsha; 否則 rsha..lsha
+        # range: 只掃本分支真正新增的 commit。
+        # 不能用單點 $lsha —— git log <sha> 是「該 commit 及所有祖先」= 全歷史；
+        # 也不能加 --all —— 它會蓋過 range 展開成所有 ref 的完整歷史（先前 bug）。
         if [ "$rsha" = "0000000000000000000000000000000000000000" ]; then
-            range="$lsha"
+            # 新分支：只掃相對 default branch(origin/main) 的新 commit。
+            base=$(git merge-base origin/main "$lsha" 2>/dev/null || echo "")
+            range="${base:+$base..}$lsha"
         else
             range="$rsha..$lsha"
         fi
         gitleaks git -v --no-banner --redact=100 --exit-code 1 \
-            --config "$CONFIG" --log-opts="--all $range" "$TARGET"
+            --config "$CONFIG" --log-opts="$range" "$TARGET"
         rc=$?
+        # origin/main 取不到時(base 空)退回單點，維持 fail-closed
         if [ "$rc" != "0" ]; then
             overall=1
         fi

@@ -21,6 +21,11 @@ fi
 if [[ -z "${FIXINDEX_DIR:-}" && -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_DIR=' "$HOME/.zshenv" | head -1 || true)"
 fi
+# T11: FIXINDEX_EVENT_LOG 也要走同一 source（bash/launchd/cron 不載 zshenv，
+# 沒補這段 fxauto 的 repeat_eval 訊號會靜默丟失。比照 FIXINDEX_DIR 既有 eval。）
+if [[ -z "${FIXINDEX_EVENT_LOG:-}" && -f "$HOME/.zshenv" ]]; then
+  eval "$(grep '^export FIXINDEX_EVENT_LOG=' "$HOME/.zshenv" | head -1 || true)"
+fi
 # 0407: FIXINDEX_INDEX 只能沿用「與 FIXINDEX_DIR 同庫」的一維；跨行庫的
 # zshenv 殘留一律視為未提供，下游改走 derived（dirname(FIXINDEX_DIR)）。
 if [[ -n "${FIXINDEX_INDEX:-}" ]]; then
@@ -162,6 +167,7 @@ Commands:
                                section trust state: verified|stale|blocked|superseded|unverified
                                （verified 需 evidence+date；stale/blocked/superseded 需 --reason，不執行任何命令）
   fixindex outcome <ID#N> <helpful|irrelevant|failed>   匿名 outcome counter（v1 只顯示不調分）
+  fixindex rule <ID[#N]> "<rule text>"  給既有條目補泛化 Rule（預設 #1；已有 Rule→拒絕覆寫）
   fixindex audit [ID#N|ID|--all] [--json]  section trust 檢查；0=clean 1=品質 2=用法
   fixindex prune [--json]      唯讀遺忘候選報告：no Rule + 單 Section + active（不刪檔）
   fixindex fi                 一行 pipe 記 defect/經驗（自動 dedup→append→建新→commit）
@@ -1090,7 +1096,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() trunc_list=() vestigial_list=() junk_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() vestigial_list=() junk_list=() trunc_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -1142,13 +1148,11 @@ _cmd_doctor_check() {
       fi
     fi
 
-    # Check 7: 截斷 title（≥78 字且結尾不是 …/。/）—— 報告用，不自動修
-    if [[ -n "$title" && "$title" != "TODO" && ${#title} -ge 78 ]]; then
-      local tlast="${title: -1}"
-      if [[ "$tlast" != "…" && "$tlast" != "。" && "$tlast" != ")" ]]; then
-        trunc_list+=("$fname (${#title} chars: ${title:0:40}…)")
-      fi
-    fi
+    # Check 7: 退役（2026-08-28）。原本以「title ≥78 字且結尾非 …」當截斷指紋，
+    # 是為了撈 fxauto 舊版 _derive_title 切在句中的殘骸。fde0a7f 已根治產生器：
+    # 現在 limit=60 且一律補 `…`（fxauto.py:203-206 的正向指紋）。
+    # 因此 ≥78 字的 title 只可能是人手寫的完整標題 —— 實測 33/33 全是誤報。
+    # 留著只會讓 doctor 每次都吐 33 行雜訊，訓練人忽略 doctor 輸出。
 
     # Check 8: vestigial tag（tags 含 auto/shadow）—— 可自動修
     if _has_vestigial_tag "$f"; then
@@ -1156,10 +1160,12 @@ _cmd_doctor_check() {
     fi
 
     # Check 9: E2E 汙染 slug 偵測（warning only，不影響 exit；B5）
+    # 光看 slug 名會誤傷真條目（omlx 是真專案名，0002 有 531 行實內容）。
+    # 真 E2E 殘骸是空殼，所以再加一道內容閘：只有小檔才算 junk。
     local slug="${base#?????}"
     case "$slug" in
       test|edge|gateway|alpha|beta|offline|nosync|common|omlx|t1)
-        junk_list+=("$fname") ;;
+        if [[ $(wc -l < "$f") -lt 40 ]]; then junk_list+=("$fname"); fi ;;
     esac
   done
 
@@ -1174,6 +1180,50 @@ _cmd_doctor_check() {
       done
     done <<<"$dup_ids"
   fi
+
+  # Check 10: 路由黑洞（warning only）。find_domain_file_auto 的 ② prefix 分支只在
+  # 「單一檔命中」時直接採用，所以某 type 下若只有一個 slug 以某高頻裸詞開頭，
+  # 該檔就變成恆命中的黑洞，任何提到那個詞的新紀錄都被吸進去（0619）。
+  local holes=()
+  while IFS= read -r line; do [[ -n "$line" ]] && holes+=("$line"); done < <(
+    python3 - "$FIXDIR" "$FX_DIR" <<'PYEOF' 2>/dev/null
+import sys, os, glob, collections
+sys.path.insert(0, sys.argv[2])
+import fxmeta
+b = collections.defaultdict(lambda: collections.defaultdict(list))
+for fp in glob.glob(os.path.join(sys.argv[1], '[0-9]*.md')):
+    n = os.path.basename(fp)[:-3]
+    if '-' not in n:
+        continue
+    _id, slug = n.split('-', 1)
+    try:
+        fm, _ = fxmeta.parse_frontmatter_full(open(fp).read())
+    except Exception:
+        continue
+    if str(fm.get('domain_bucket')).lower() == 'true':
+        continue
+    b[str(fm.get('type') or 'defect')][slug.split('-')[0]].append(n)
+for et, d in sorted(b.items()):
+    for tok, names in sorted(d.items()):
+        if len(names) != 1 or len(tok) <= 3:
+            continue
+        tot = sum(len(v) for dd in b.values() for k, v in dd.items() if k == tok)
+        if tot >= 3:
+            print(f"{names[0]}  (type={et} 首詞 '{tok}' prefix 恆命中；全庫同首詞 {tot} 檔)")
+# 單詞 slug 更嚴重：走 ① 精確匹配分支，優先權高於 prefix，且不受「唯一才採用」限制。
+# 刻意的領域累積桶（0001-hermes 之類）會被一併列出，屬預期，忽略即可。
+for fp in sorted(glob.glob(os.path.join(sys.argv[1], '[0-9]*.md'))):
+    n = os.path.basename(fp)[:-3]
+    if '-' in n and '-' not in n.split('-', 1)[1]:
+        try:
+            fm, _ = fxmeta.parse_frontmatter_full(open(fp).read())
+            if str(fm.get('domain_bucket')).lower() == 'true':
+                continue
+        except Exception:
+            pass
+        print(f"{n}  (單詞 slug，走 ① 精確匹配；若非刻意的領域桶請改名)")
+PYEOF
+  )
 
   # Report issues
   local has_issues=false
@@ -1214,12 +1264,6 @@ _cmd_doctor_check() {
     printf '  %s\n' "${missing_list[@]}"
   fi
 
-  if [[ ${#trunc_list[@]} -gt 0 ]]; then
-    has_issues=true
-    echo "truncated titles (${#trunc_list[@]} files, report only):"
-    printf '  %s\n' "${trunc_list[@]}"
-  fi
-
   if [[ ${#vestigial_list[@]} -gt 0 ]]; then
     has_issues=true
     echo "vestigial tags (${#vestigial_list[@]} files, auto-fixable):"
@@ -1230,6 +1274,11 @@ _cmd_doctor_check() {
   if [[ ${#junk_list[@]} -gt 0 ]]; then
     echo "⚠ 疑似 E2E 測試 junk（${#junk_list[@]} files，warning only）:"
     printf '  %s\n' "${junk_list[@]}"
+  fi
+
+  if [[ ${#holes[@]} -gt 0 ]]; then
+    echo "⚠ 路由黑洞（${#holes[@]} files，warning only）—— 改 slug 首詞使其特異："
+    printf '  %s\n' "${holes[@]}"
   fi
 
   # Summary
@@ -1360,6 +1409,24 @@ cmd_outcome() {
   sync_push "$f"
 }
 
+cmd_rule() {
+  [[ $# -eq 2 ]] || die "usage: fixindex rule <ID[#N]> \"<rule text>\""
+  local key="$1" text="$2" id
+  id=$(echo "$key" | cut -d# -f1)
+  [[ "$key" == *"#"* ]] || key="${key}#1"      # 省略 #<sec> 預設 #1
+  local fpath
+  fpath=$(resolve_id "$id") || true
+  [[ -n "$fpath" ]] || die "no fix with id $id (key: $key)"
+  local fxmeta_py="$FX_DIR/fxmeta.py"
+  local out="" rc=0
+  # set -e 下 command substitution 回傳非零會讓 script 在 rc=$? 前就退出（error case
+  # 變無輸出且 exit=2）。用 `|| rc=$?` 抑制 set -e，保留 python 的 rc 並印出錯誤。
+  out=$(FIXINDEX_DIR="$FIXDIR" python3 "$fxmeta_py" rule "$fpath" "$key" "$text" 2>&1) || rc=$?
+  echo "$out"
+  [[ $rc -eq 0 ]] || die "$out"
+  sync_push "$fpath"
+}
+
 cmd_audit() {
   # usage: fixindex audit <ID#N>|<ID>|--all [--json]
   local json_flag="" key="${1:-}"
@@ -1463,7 +1530,7 @@ EOF
 
 cmd_status_lint() {
   # R3-4: status: superseded 但 supersedes 為空 → 報錯（0452 形態）
-  local dir="${FIXINDEX_DIR:-${FIXDIR:-$HOME/.claude/projects/-Users-51mini/memory/fixes}}"
+  local dir="${FIXINDEX_DIR:-${FIXDIR:-$PWD/fixes}}"
   [[ -d "$dir" ]] || { echo "fixindex status lint: FIXINDEX_DIR 不存在: $dir"; return 1; }
   local f status supersedes superseded_by bad=0
   for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md "$dir"/[0-9][0-9][0-9][0-9].md; do
@@ -1529,6 +1596,7 @@ main() {
     supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@" ;;
     mark)      warn_if_default_dir; sync_pull; cmd_mark "$@" ;;
     outcome)   warn_if_default_dir; sync_pull; cmd_outcome "$@" ;;
+    rule)      warn_if_default_dir; sync_pull; cmd_rule "$@" ;;
     audit)     sync_pull_soft; cmd_audit "$@" ;;
     prune)     sync_pull_soft; cmd_prune "$@" ;;
     fi)        warn_if_default_dir; sync_pull; cmd_fi "$@" ;;

@@ -11,6 +11,8 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 """
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
+import fcntl, time
+from contextlib import contextmanager
 import fxmeta
 import fxsync
 
@@ -60,7 +62,8 @@ def _intake_gate(rule):
     sys.exit(1)
 
 
-def next_id():
+def _scan_next_id():
+    """純掃描：取現有最大 ID + 1（不鎖，呼叫端須已持有 id_lock）。"""
     files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
     if not files:
         return '0001'
@@ -68,8 +71,61 @@ def next_id():
     return f'{int(last) + 1:04d}'
 
 
+ID_LOCK_TIMEOUT = float(os.environ.get('FIXINDEX_ID_LOCK_TIMEOUT', '5'))
+
+
+class IdLockTimeout(Exception):
+    """配號鎖等待逾時——另一寫行程持鎖過久，拒絕無鎖配號（fail loud）。"""
+
+
+@contextmanager
+def id_lock(timeout=ID_LOCK_TIMEOUT):
+    """配號＋寫入的檔案鎖（fcntl.flock on $FIXINDEX_DIR/.id.lock，走既有 FIXINDEX_DIR 不寫死路徑）。
+
+    - timeout（預設 5s）到 → 拋 IdLockTimeout（fail loud，不退回無鎖配號）
+    - 鎖在例外路徑也會釋放（finally；fcntl.flock 與檔案描述子都關）
+    """
+    lock_path = os.path.join(FIXINDEX_DIR, '.id.lock')
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise IdLockTimeout(
+                        f'配號鎖等待逾時 {timeout:.0f}s（{lock_path}）：'
+                        '另一寫行程持鎖過久，拒絕在無鎖下配號')
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def next_id(_locked=True):
+    """掃描取 max+1。
+
+    _locked=True（預設）：獨自呼叫時自行持鎖，適合 shadow/preview 等不寫入路徑。
+    寫入路徑必須用 `with id_lock(): fid = next_id(_locked=False)` 把
+    「配號→建檔」包在同一把鎖內，否則兩行程會在計算與寫入之間看到同一
+    個 max，配出重複 ID（0616 競態）。
+    """
+    if _locked:
+        with id_lock():
+            return _scan_next_id()
+    return _scan_next_id()
+
+
 # LINKER：BM25 找候選 → token 覆蓋率確認。「被判定為已知」→ append 當證據，不開新檔。
 LINK_COVERAGE = float(os.environ.get('FIXINDEX_LINK_COVERAGE', '0.8'))
+# 明確領先要求：最佳候選覆蓋率須比第二名高 L​​INK_MARGIN，否則回 None。
+# 兩條都達覆蓋率 1.0 表示 query 分不出它們——寧可開新條目也不要掛錯地方。
+LINK_MARGIN = float(os.environ.get('FIXINDEX_LINK_MARGIN', '0.15'))
 
 
 def _path_for_id(fid):
@@ -87,6 +143,10 @@ def find_related(query, etype='defect'):
     語料，複述既有條目（最該收容）ratio=1.04、孤立罕見詞（最不該收容）ratio=1.04
     —— 兩端同值，零鑑別力。同一組樣本的覆蓋率則是 1.0 / 0.71（相近但不同案）/
     0.13（新主題）/ 0.0（孤立詞），乾淨分離，且不隨語料大小漂移。
+    回放表結論（tie-break 與 margin 的由來）：門檻 0.7→1.0，自連/誤連結果不動；但兩條
+    覆蓋率同為 1.0 時任取第一會約 40% 誤連。故 (a) 覆蓋率同位改用 BM25 raw score 當第二
+    排序鍵，(b) 加明確領先——最佳覆蓋率須比第二名高 FIXINDEX_LINK_MARGIN（預設 0.15），
+    否則回 None（寧可開新條目也不要掛錯地方）。單一候選或第二名未達門檻時跳過 margin。
     檢索掛掉 → 回 None（不拒寫）。"""
     if not query or not query.strip():
         return None
@@ -100,16 +160,25 @@ def find_related(query, etype='defect'):
             entries = [e for e in entries if e['type'] == etype]
         if not entries:
             return None
-        best = None
-        for i, _score in X.BM25Engine(entries).search(query, limit=5):
+        cands = []
+        for i, score in X.BM25Engine(entries).search(query, limit=5):
             cov = len(qt & set(entries[i]['tokens'])) / len(qt)
-            if best is None or cov > best[1]:
-                best = (entries[i], cov)
+            cands.append((entries[i], score, cov))
+        if not cands:
+            return None
+        # 排序：先覆蓋率降冪；同位用 BM25 raw score 降冪（tie-break，score 不再丟棄）。
+        cands.sort(key=lambda c: (c[2], c[1]), reverse=True)
+        best = cands[0]
+        # 明確領先要求：只有一個候選、或第二名未達門檻（不成競爭）時跳過 margin 檢查。
+        second = cands[1] if len(cands) > 1 else None
+        if second is not None and second[2] >= LINK_COVERAGE \
+                and (best[2] - second[2]) < LINK_MARGIN:
+            return None
+        if best[2] < LINK_COVERAGE:
+            return None
+        return (best[0]['file'][:4], round(best[2], 2))
     except Exception:
         return None
-    if best is None or best[1] < LINK_COVERAGE:
-        return None
-    return (best[0]['file'][:4], round(best[1], 2))
 
 
 def slugify(text, fallback='untitled'):
@@ -122,7 +191,15 @@ def slugify(text, fallback='untitled'):
         # 因此退回 fallback，並在 stderr 留痕讓呼叫者知道 slug 沒有語意。
         print(f'fixindex: slug normalized to empty, falling back to {fallback!r} (got: {text!r})',
               file=sys.stderr)
-        return fallback
+        out = fallback
+    if '-' not in out:
+        # 單詞 slug 會走 find_domain_file_auto 的 ① 精確匹配分支——該分支無「唯一才採用」
+        # 守衛，只要 title/symptom 出現該詞就命中，於是條目變成恆命中黑洞（0619/0641）。
+        # 中文標題被 NFKD 剝到只剩一個英文詞時最常發生。補一個尾綴讓它降級到 ② prefix
+        # 分支：那條有 len(g2)==1 守衛，且 doctor check 10 會盯。
+        print(f'fixindex: slug {out!r} 是單詞，補成 {out}-note 以免變成路由黑洞；'
+              f'要語意更好的 slug 請用 `fixindex fi <slug> --new`', file=sys.stderr)
+        return f'{out}-note'
     return out
 
 
@@ -186,8 +263,9 @@ def find_domain_file_auto(title, symps, etype='defect'):
 
 def _derive_title(text, limit=60):
     """從首個 symptom 推標題：先找句號類終止符（。．.！？ 是最理想切點），
-    找不到才退回次級斷句符（；;，,、（(【—）；兩輪都無邊界才退回硬切，
-    並一律補 `…`（讓截斷肉眼可辨，也給 doctor 正向指紋）。"""
+    找不到才退回次級斷句符（；;，,、（(【—）；兩輪都無邊界才退回硬切。
+    **只要有截斷就補 `…`**（讓截斷肉眼可辨，也給 doctor 正向指紋）——
+    原本只有硬切那條路徑補，邊界切不補，導致截斷標題跟完整標題長得一樣。"""
     text = str(text).strip()
     if not text:
         return 'untitled'
@@ -195,12 +273,25 @@ def _derive_title(text, limit=60):
         return text
     # 句號類是最理想的切點，必須優先；次級（頓號/逗號/括號/破折號）才是退路。
     # 原本只有次級集合，導致標題切在句中而非句末。
-    cuts_strong = '。．.！!？?'
+    # 半形 `.` 只有在後面接空白或字串結尾時才算句號。否則會切在
+    # 127.0.0.1 / Darwin 25.5 / origin/main..branch / settings.json 這種
+    # 路徑、IP、版號、檔名的點上——實測產出「判定本地服務（127.0.0」這種標題。
+    # 全形 。．！？ 不會出現在識別碼裡，維持無條件強切。
+    cuts_strong = '。．！!？?'
     cuts_weak = '；;，,、（(【—'
+
+    def _is_strong(i):
+        c = text[i]
+        if c in cuts_strong:
+            return True
+        if c == '.':
+            return i + 1 >= len(text) or text[i + 1].isspace()
+        return False
+
     # 第一輪：句號類，從後往前找 ≤limit 的最長切點
     best = -1
     for i in range(limit - 1, -1, -1):
-        if text[i] in cuts_strong:
+        if _is_strong(i):
             best = i
             break
     # 第二輪：次級斷句符（僅當第一輪沒找到）
@@ -210,7 +301,9 @@ def _derive_title(text, limit=60):
                 best = i
                 break
     if best >= 0:
-        return text[:best + 1].rstrip('；;，,、（(【—-–—。．.！!？? ')
+        cut = text[:best + 1].rstrip('；;，,、（(【—-–—。．.！!？? ')
+        # 有丟東西就補 … —— 邊界切以前不補，截斷標題因此無指紋可辨（見上方 docstring）
+        return cut if cut == text else cut + '…'
     # 無邊界 → 硬切補 …
     return text[:limit] + '…'
 
@@ -600,6 +693,28 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     return snap, n
 
 
+# §6a: repeat_eval 訊號的落檔 sink。原本這條提示只印一行 stderr 就丟掉，
+# 沒有任何下游消費者——它其實是「這類問題重複夠多次了、該編譯成一條規則」的
+# 現成觸發器，落檔才有人能讀回來。
+#
+# 路徑一律走 FIXINDEX_EVENT_LOG，未設就 no-op：本 repo 是 public 的，
+# 不得寫死任何私有路徑。輔助訊號而已，寫檔失敗一律吞掉，不能讓主流程掛掉。
+def _emit_repeat_eval_event(hint):
+    path = os.environ.get('FIXINDEX_EVENT_LOG')
+    if not path or not hint:
+        return
+    try:
+        m = re.match(r'FIXINDEX_REPEAT_EVAL key=(\S+) reason=(\S+) recommendation=(\S+)', hint)
+        if not m:
+            return
+        rec = {'ts': datetime.datetime.now().isoformat(timespec='seconds'),
+               'key': m.group(1), 'reason': m.group(2), 'recommendation': m.group(3)}
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
+
 # §6: repeat → eval 提示。只在寫入路徑（fi/auto committed）觸發；最多一則。
 def repeat_eval_hint(path, title, symps, new_secn=None):
     """Return a hint line
@@ -643,6 +758,9 @@ def repeat_eval_hint(path, title, symps, new_secn=None):
             _, _, outcome, _ = fxmeta.section_summary(body)
             if outcome.get('failed', 0) >= 2:
                 first_reason = f'FIXINDEX_REPEAT_EVAL key={base[:4]}#{num} reason=failed_outcome recommendation=health_check'
+    # 在 return 前發，不是在三個呼叫點各加一次——少三處要同步的地方，
+    # 未來新增呼叫點也自動涵蓋。判定邏輯與 stderr 輸出完全沒動。
+    _emit_repeat_eval_event(first_reason)
     return first_reason
 
 
@@ -682,17 +800,18 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
 
     if dup:
         old_id = dup[0]
-        new_id = next_id()
-        slug = slugify(title, fallback='insight')
-        entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
-                                    slug, queries, tags, detail)
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        import glob as _g
-        old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
-        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+        with id_lock():
+            new_id = next_id(_locked=False)
+            slug = slugify(title, fallback='insight')
+            entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
+                                        slug, queries, tags, detail)
+            os.makedirs(FIXINDEX_DIR, exist_ok=True)
+            import glob as _g
+            old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
+            path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
+            with open(path, 'w') as f:
+                f.write(entry)
+            _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'etype': 'insight', 'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
@@ -731,15 +850,16 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
 
     # INTAKE gate：LINKER 未收容、要開新 insight 條目時才強制回答可泛化。
     _intake_gate(ini.get('rule', ''))
-    fid = next_id()
-    slug = slugify(title, fallback='insight')
-    entry = build_entry_insight(fid, title, context, insight, impl, revisit,
-                                slug, queries, tags, detail, rule=ini.get('rule', ''))
-    os.makedirs(FIXINDEX_DIR, exist_ok=True)
-    path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-    with open(path, 'w') as f:
-        f.write(entry)
-    _verify_written(path)   # 2d: 寫完即驗
+    with id_lock():
+        fid = next_id(_locked=False)
+        slug = slugify(title, fallback='insight')
+        entry = build_entry_insight(fid, title, context, insight, impl, revisit,
+                                    slug, queries, tags, detail, rule=ini.get('rule', ''))
+        os.makedirs(FIXINDEX_DIR, exist_ok=True)
+        path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
+        with open(path, 'w') as f:
+            f.write(entry)
+        _verify_written(path)   # 2d: 寫完即驗
     _run_index('re-index')
     payload = {'etype': 'insight', 'created': path, 'dedup': False}
     paths = [path, _resolve_index_file()]
@@ -785,17 +905,18 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
     if dup:
         # 去個案化：取代舊條目, 不創重複檔
         old_id = dup[0]
-        new_id = next_id()
-        slug = slugify(title)
-        entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
-        import glob as _g
-        old_files = sorted(_g.glob(old_path))
-        path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+        with id_lock():
+            new_id = next_id(_locked=False)
+            slug = slugify(title)
+            entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
+            os.makedirs(FIXINDEX_DIR, exist_ok=True)
+            old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
+            import glob as _g
+            old_files = sorted(_g.glob(old_path))
+            path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
+            with open(path, 'w') as f:
+                f.write(entry)
+            _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
@@ -844,15 +965,16 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
                 return payload, paths
         # INTAKE gate：LINKER 未收容、真正要開新條目前才強制回答可泛化。
         _intake_gate(fields.get('rule', ''))
-        fid = next_id()
-        slug = slugify(title)
-        entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
-                            evidence, rule=fields.get('rule', ''))
-        os.makedirs(FIXINDEX_DIR, exist_ok=True)
-        path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-        with open(path, 'w') as f:
-            f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗
+        with id_lock():
+            fid = next_id(_locked=False)
+            slug = slugify(title)
+            entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
+                                evidence, rule=fields.get('rule', ''))
+            os.makedirs(FIXINDEX_DIR, exist_ok=True)
+            path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
+            with open(path, 'w') as f:
+                f.write(entry)
+            _verify_written(path)   # 2d: 寫完即驗
         _run_index('re-index')
         payload = {'created': path, 'dedup': False}
         paths = [path, _resolve_index_file()]
@@ -946,12 +1068,15 @@ def main():
         if mode == '--commit':
             all_paths = list(dict.fromkeys(d_paths + i_paths))
             out.update(_git_commit_push(all_paths))
+            _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
         print(json.dumps(out, ensure_ascii=False))
         if out.get('git_error'):
             sys.exit(1)
         return
     elif has_insight_key:
         payload, _ = _pipeline_insight(insight_fields, detail, mode, tags_arg)
+        if mode == '--commit':
+            _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
         print(json.dumps(payload, ensure_ascii=False))
         if payload.get('git_error'):
             sys.exit(1)
@@ -984,6 +1109,8 @@ def main():
         sys.exit(1)
 
     payload, _ = _pipeline_defect(fields, detail, mode, tags_arg, title_override)
+    if mode == '--commit':
+        _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
     print(json.dumps(payload, ensure_ascii=False))
     if payload.get('git_error'):
         sys.exit(1)

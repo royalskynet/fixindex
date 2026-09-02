@@ -99,27 +99,41 @@ def backfill(force=False, limit=0):
                 if line.strip():
                     hashes.add(json.loads(line).get("hash", ""))
 
-    files = sorted(glob.glob(f"{FIXDIR}/[0-9]*.md"))
-    if limit:
-        files = files[:limit]
+    files = sorted(glob.glob(f"{FIXDIR}/[0-9]*.md"),
+                   key=lambda p: os.path.getmtime(p), reverse=True)
+    # 預解析每檔 section，只保留「尚有未 blurb section」的檔案；
+    # limit=N 表示「最新的、需要補 blurb 的 N 個檔案」（修壞點 3：
+    # 原 files[:limit] 是檔名排序最舊的 N 個 → 恆跳過、恆產 0）
+    pending = []
+    for fp in files:
+        txt = open(fp).read()
+        fm, body_start = fxmeta.parse_frontmatter_full(txt)
+        secs = []
+        need = False
+        for num, heading, body in fxmeta.iter_sections(txt, body_start):
+            # hash 語意與舊 get_sections 的 content 一致：每行補 '\n'（含尾 \n）
+            content = body + "\n"
+            h = hashlib.sha1(content.encode()).hexdigest()[:12]
+            if h not in hashes or force:
+                need = True
+            secs.append((f"§{num} {heading}".strip() if heading else f"§{num}",
+                         content, h, f"{os.path.basename(fp).replace('.md','')[:4]}#{len(secs)+1}"))
+        if need:
+            pending.append((fp, secs))
+        if limit and len(pending) >= limit:
+            break
 
     count = 0
     with open(BLURB_PATH, "a") as bf:
-        for fp in files:
-            fn = os.path.basename(fp).replace(".md", "")
-            txt = open(fp).read()
-            fm, body_start = fxmeta.parse_frontmatter_full(txt)
-            sections = fxmeta.get_sections(txt, body_start)
-            for i, sec in enumerate(sections):
-                h = hashlib.sha1(sec["content"].encode()).hexdigest()[:12]
+        for fp, secs in pending:
+            for heading, content, h, key in secs:
                 if h in hashes and not force:
                     continue
-                key = f"{fn[:4]}#{i+1}"
-                blurb, vocab, finish_reason, completion_tokens = fetch_blurb(sec["content"], sec["heading"])
+                blurb, vocab, finish_reason, completion_tokens = fetch_blurb(content, heading)
                 if not blurb:
                     print(f"  skip {key}: finish={finish_reason} tokens={completion_tokens}", file=sys.stderr)
                     continue
-                entry = {"key": key, "hash": h, "heading": sec["heading"], "blurb": blurb, "vocab": vocab, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                entry = {"key": key, "hash": h, "heading": heading, "blurb": blurb, "vocab": vocab, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
                 bf.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 bf.flush()
                 count += 1

@@ -2,7 +2,7 @@
 # intake-gate-test.sh — INTAKE / LINKER / COMPRESSOR 端到端測試 (plan §4.4/4.5/4.6, task B-1/B-3/B-2)
 # 純 bash。全過 "ALL PASS (N/M)"; 失過印 FAILURE 且 exit 1。
 
-FXAUTO="/Users/51mini/dev/fixindex/fxauto.py"
+FXAUTO="${FXAUTO:-$(cd "$(dirname "$0")/.." && pwd)/fxauto.py}"
 PY="${PY:-$(command -v python3)}"
 PASS_CT=0; FAIL_CT=0
 ok(){ PASS_CT=$((PASS_CT+1)); printf "PASS  %s\n"   "$1"; }

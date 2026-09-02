@@ -28,9 +28,10 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const os = require('os');
 
-const PLANS_DIR = path.join(process.env.HOME || '/Users/51mini', '.claude', 'plans');
-const GUARD_DIR = path.join(process.env.HOME || '/Users/51mini', '.claude', 'guard-state');
+const PLANS_DIR = path.join(process.env.HOME || os.homedir(), '.claude', 'plans');
+const GUARD_DIR = path.join(process.env.HOME || os.homedir(), '.claude', 'guard-state');
 const FAIL_THRESHOLD = 2;
 const TRANSCRIPT_TAIL_BYTES = 200 * 1024; // 只讀尾端 200KB，絕不整檔讀入
 

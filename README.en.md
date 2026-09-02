@@ -132,6 +132,7 @@ The test is mechanical: **if you can't write a `Symptom` someone would plausibly
 | `fixindex re-index` | Regenerate the `<!-- fixindex:table -->` block in `FIX-INDEX.md`. Idempotent. |
 | `fixindex supersede <old> <new>` | Mark `<old>` superseded by `<new>`, keep file. |
 | `fixindex insights [<topic>]` | Matching `type: insight` entries only (no arg = list all). |
+| `fixindex rule <ID[#N]> "<text>"` | Backfill a generalized Rule onto an existing entry (defaults #1; refuses to overwrite an existing Rule). |
 | `fixindex prune [--json]` | Read-only "forgetting candidates": no `**Rule:**` + single § + `active` (deletes nothing). |
 | `fixindex fi` | Append one entry from stdin: dedup/supersede → domain match → re-index → commit. |
 | `fixindex help` | Show usage. |

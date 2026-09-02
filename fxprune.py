@@ -47,7 +47,9 @@ def candidates(fixdir):
             reasons.append('no Rule')
         if n_sec <= 1:
             reasons.append('single-section')
-        if reasons:
+        # AND（依 docstring）：同時「無 Rule」且「單 § 段落」才入列。原 `if reasons:` 是
+        # OR，導致 93% 條目入列、無訊號（fxprune 漂移，2026-08-27 修正）。
+        if len(reasons) == 2:
             out.append((fid, title, '; '.join(reasons)))
     return out
 
