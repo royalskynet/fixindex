@@ -5,7 +5,7 @@
 # 全過印 ALL PASS; 任一失敗印 FAILURE 且 exit 1。
 # 用法: bash tools/section-trust-test.sh
 
-REPO="/Users/51mini/dev/fixindex"
+REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 PY="/usr/bin/python3"
 FIXMETA="$REPO/fxmeta.py"
 FXSEARCH="$REPO/fxsearch.py"

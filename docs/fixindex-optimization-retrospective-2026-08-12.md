@@ -78,7 +78,7 @@
 |---|---|
 | `4b23f1a` | gitignore 蓋住帶時間戳備份，防個人備份誤進 repo |
 | `afd5c80` | 脫敏：移除含本機路徑的個人 dev-log（公開 repo 不該放個人調查筆記） |
-| `7859f96` | 修可移植性（移除硬編 /Users/51mini 路徑，fallback 改 repo-relative fixes/）+ 重寫詳盡 README |
+| `7859f96` | 修可移植性（移除硬編 /Users/&lt;user&gt; 路徑，fallback 改 repo-relative fixes/）+ 重寫詳盡 README |
 | `d348401` | fi 自動回填 symptoms + 包 §N 章節（fi 建出即 find 可搜） |
 | `6ad28f6` | **find 三根因修復**: parse_fm in_fm、build_entries fallback、BM25 prefix-fuzzy |
 | `9a7c426` | 借鏡 claude-mem-lite：CJK 字典分詞 + 雙向同義詞 |

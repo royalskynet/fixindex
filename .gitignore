@@ -11,3 +11,6 @@ __pycache__/
 # Personal fix logs never belong in this repo — it ships only the CLI.
 # Keep your runbook in a separate (private) checkout and point FIXINDEX_DIR at it.
 fixes/[0-9]*.md
+
+# 本機基礎設施清單（機器特定路徑），不進公開 repo；indirection-doctor 走 INDIRECTION_MANIFEST env
+tools/indirection-manifest.json

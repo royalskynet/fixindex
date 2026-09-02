@@ -1530,7 +1530,7 @@ EOF
 
 cmd_status_lint() {
   # R3-4: status: superseded 但 supersedes 為空 → 報錯（0452 形態）
-  local dir="${FIXINDEX_DIR:-${FIXDIR:-$HOME/.claude/projects/-Users-51mini/memory/fixes}}"
+  local dir="${FIXINDEX_DIR:-${FIXDIR:-$PWD/fixes}}"
   [[ -d "$dir" ]] || { echo "fixindex status lint: FIXINDEX_DIR 不存在: $dir"; return 1; }
   local f status supersedes superseded_by bad=0
   for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md "$dir"/[0-9][0-9][0-9][0-9].md; do
