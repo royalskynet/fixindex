@@ -4,6 +4,21 @@
 
 set -euo pipefail
 
+# brew python@3.14/@3.12 的 pyexpat 連到 macOS 26 的舊版 /usr/lib/libexpat.1.dylib，
+# 符號對不上 → import xml 掛掉 → pip 無法啟動 → 這顆 python 永遠裝不了 pyyaml。
+# 改挑一顆真的 import 得動 yaml 的直譯器；brew 修好後這個條件自動失效，shim 不再被用到。
+if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  for _py in /usr/bin/python3 /usr/local/bin/python3; do
+    if [[ -x "$_py" ]] && "$_py" -c 'import yaml' >/dev/null 2>&1; then
+      _pyshim="$HOME/.local/libexec/fixindex"
+      mkdir -p "$_pyshim" && ln -sf "$_py" "$_pyshim/python3"
+      export PATH="$_pyshim:$PATH"
+      break
+    fi
+  done
+  unset _py _pyshim
+fi
+
 # Defaults look in the current working directory. Override with env vars
 # (FIXINDEX_DIR / FIXINDEX_INDEX) to point at your own runbook checkout.
 # 若未設定 → 從 ~/.zshenv 單一源自動讀取（worker 不必自己 export）。
