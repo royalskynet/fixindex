@@ -1640,8 +1640,10 @@ main() {
     grep)      sync_pull_soft; cmd_grep "$@" ;;
     show)      sync_pull_soft; cmd_show "$@" ;;
     list)      sync_pull_soft; cmd_list ;;
-    new)       warn_if_default_dir; sync_pull; cmd_new "$@" ;;
-    doctor)    warn_if_default_dir; sync_pull; cmd_doctor "$@" ;;
+    new)       warn_if_default_dir
+               if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_new "$@"; else sync_pull; cmd_new "$@"; fi ;;
+    doctor)    warn_if_default_dir
+               if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_doctor "$@"; else sync_pull; cmd_doctor "$@"; fi ;;
     status)    warn_if_default_dir; _cmd_status_fxstatus "$@" ;;
     re-index)  warn_if_default_dir; sync_pull; cmd_re_index; sync_push "$INDEX_FILE" ;;
     supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@" ;;
@@ -1650,8 +1652,10 @@ main() {
     rule)      warn_if_default_dir; sync_pull; cmd_rule "$@" ;;
     audit)     sync_pull_soft; cmd_audit "$@" ;;
     prune)     sync_pull_soft; cmd_prune "$@" ;;
-    fi)        warn_if_default_dir; sync_pull; cmd_fi "$@" ;;
-    auto)      warn_if_default_dir; sync_pull; cmd_auto "$@" ;;
+    fi)        warn_if_default_dir
+               if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_fi "$@"; else sync_pull; cmd_fi "$@"; fi ;;
+    auto)      warn_if_default_dir
+               if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_auto "$@"; else sync_pull; cmd_auto "$@"; fi ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $sub (try 'fixindex help')" ;;
   esac

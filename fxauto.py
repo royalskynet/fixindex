@@ -250,7 +250,10 @@ def find_domain_file_auto(title, symps, etype='defect'):
         for t in set(cand):
             if t == s:
                 g1[fp] = g1.get(fp, 0) + 1
-            elif s.startswith(t + '-') or t.startswith(s + '-'):
+            # 短 token（<5 字）不做 dash-prefix 匹配：單詞 slug 常是常見詞
+            # （test/fix/git/note…），prefix 命中等同亂猜，污染既有條目
+            # （2026-09-05 實例：probe「test probe」被 append 進 0611-test-harness-…）。
+            elif len(t) >= 5 and (s.startswith(t + '-') or t.startswith(s + '-')):
                 g2[fp] = g2.get(fp, 0) + 1
     # ①直接用：取命中 token 最多者（多檔平手時取最多，仍屬 ① 明確匹配）
     if g1:
