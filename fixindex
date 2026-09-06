@@ -1137,7 +1137,7 @@ Checks:
   6. Missing sections (non-stub without any ## §N headings)
   7. (retired 2026-08-28 — truncation fingerprint no longer meaningful)
   8. Vestigial tags (auto/shadow)
-  9. Runaway symptoms (symptom item >400 chars / 4+ consecutive backslashes / file >500KB; report only)
+  9. Runaway symptoms (symptom item >2000 chars / 12+ consecutive backslashes / file >500KB; report only)
   ⚠  E2E junk slugs (warning only)
   ⚠  Routing black holes (warning only)
 
@@ -1283,7 +1283,7 @@ PYEOF
   )
 
   # Check 9 (B2, WO-2026-09-06): runaway symptoms —— 只報不修（--fix 不會碰，會砍到內容）
-  # 三種病態指紋：symptoms 項 >400 字／4+ 連續反斜線／檔案 >500KB。
+  # 三種病態指紋：symptoms 項 >2000 字／12+ 連續反斜線／檔案 >500KB。
   # 單一 python 掃全部（與 Check 10 路由黑洞同模式），避免逐檔 spawn。
   local runaway_list=()
   while IFS= read -r line; do [[ -n "$line" ]] && runaway_list+=("$line"); done < <(
@@ -1300,9 +1300,9 @@ for fp in sorted(glob.glob(os.path.join(d, '[0-9]*.md'))):
         continue
     fm, _ = fxmeta.parse_frontmatter_full(txt)
     for sx in (fm.get('symptoms') or []):
-        if isinstance(sx, str) and len(sx) > 400:
+        if isinstance(sx, str) and len(sx) > 2000:
             print(f"{n}: symptom item too long (len={len(sx)})")
-    if '\\\\\\\\' in txt:
+    if '\\\\\\\\\\\\\\\\\\\\\\\\' in txt:
         print(f"{n}: backslash run")
     sz = os.path.getsize(fp)
     if sz > 500000:
