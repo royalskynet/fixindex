@@ -53,53 +53,33 @@ SYNONYMS = {
     'debug': {'除錯','診斷'},
 }
 
+_CJK_RUN_RE = re.compile('(' + _CJK + '+)|((?:(?!' + _CJK + r')[\w._/@\-:#])+)')
+_CJK_DICT_RE = re.compile('|'.join(map(re.escape, _CJK_SORTED)))  # 已按長度降序 → 最長優先
+
 def _cjk_segment(run):
     """字典優先分詞 + bigram fallback，回傳 token list。"""
     toks = []
     i = 0
-    while i < len(run):
-        matched = False
-        for w in _CJK_SORTED:
-            if run.startswith(w, i):
-                toks.append(w)
-                i += len(w)
-                matched = True
-                break
-        if not matched:
-            if i + 1 < len(run):
+    n = len(run)
+    while i < n:
+        m = _CJK_DICT_RE.match(run, i)
+        if m:
+            toks.append(m.group())
+            i = m.end()
+        else:
+            if i + 1 < n:
                 toks.append(run[i:i+2])   # 疊字 bigram
             i += 1
     return toks
 
 def tokenize(text):
-    out = []
-    cjk = ''
-    en = ''
-    for ch in text:
-        if re.match(_CJK, ch):
-            if en:
-                out.append(en.lower()); en = ''
-            cjk += ch
-        elif ch.isalnum() or ch in '._/@-:#':
-            if cjk:
-                out.append(cjk); cjk = ''
-            en += ch.lower()
-        else:
-            if en:
-                out.append(en.lower()); en = ''
-            if cjk:
-                out.append(cjk); cjk = ''
-    if en:
-        out.append(en.lower())
-    if cjk:
-        out.append(cjk)
-    # 把 CJK 連續段切詞：字典優先 + bigram fallback
+    # 一次 finditer 切出 CJK 連續段／英數段；舊版逐字元 re.match 在 15MB 語料上要 70s。
     final = []
-    for t in out:
-        if re.fullmatch(_CJK + r'+', t):
-            final.extend(_cjk_segment(t))
+    for m in _CJK_RUN_RE.finditer(text):
+        if m.group(1):
+            final.extend(_cjk_segment(m.group(1)))
         else:
-            final.append(t)
+            final.append(m.group(2).lower())
     return [t for t in final if t]
 
 # ── BM25 ──

@@ -311,6 +311,19 @@ def _derive_title(text, limit=60):
     return text[:limit] + '…'
 
 
+def _unq(item):
+    """把 frontmatter block item 還原成裸字串。舊版只 strip 引號不解碼，
+    `\\"` 留在值裡再被 _q 跳脫一次 → 每次 fi 反斜線翻倍（0001 長到 8.5MB）。"""
+    s = item.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in '"\'':
+        try:
+            import json, yaml as _y
+            return str(json.loads(s) if s[0] == '"' else _y.safe_load(s)).strip()
+        except Exception:
+            return re.sub(r'\\(.)', r'\1', s[1:-1]).strip()
+    return s
+
+
 def _merge_symptoms(path, new_symps):
     """Append missing symptoms into the file's frontmatter symptoms: list.
 
@@ -351,7 +364,7 @@ def _merge_symptoms(path, new_symps):
         li = re.match(r'^\s*-\s+(.*)$', lines[idx])
         if not li:
             break
-        existing.append(li.group(1).strip().strip('"\''))
+        existing.append(_unq(li.group(1)))
         idx += 1
     end = idx
     # 去重保序（比對 strip 後值）
@@ -359,6 +372,8 @@ def _merge_symptoms(path, new_symps):
     merged = []
     for v in list(existing) + [s.strip() for s in new_symps]:
         k = v.strip()
+        if len(k) > 400 or '\\\\' in k:
+            continue  # ponytail: 症狀是一行字；超長/含跳脫殘渣 = 已壞，丟掉不要再放大
         if k and k not in seen:
             seen[k] = True
             merged.append(v)

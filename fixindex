@@ -753,7 +753,9 @@ for i in range(syms_start or 0, syms_end or len(fm)):
             try:
                 item = json.loads(item)
             except json.JSONDecodeError:
-                pass
+                item = re.sub(r'\\(.)', r'\1', item[1:-1])  # 解不開也要去殼，否則 dumps 再包一層 → 反斜線翻倍
+        if len(str(item)) > 400 or '\\\\' in str(item):
+            continue  # ponytail: 已壞的症狀不再放大
         existing.append(str(item))
 
 all_items = []
