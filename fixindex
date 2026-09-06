@@ -172,6 +172,7 @@ Commands:
   fixindex find <keyword>       BM25 + contextual blurb 語意排序（fxsearch）
   fixindex insights <topic>     find 限 type: insight（設計決策/可轉移洞見）；plan 起點按主題提取
   fixindex insights             無參數：列出全部 insight 條目
+  fixindex externals [topic]    find 限 type: external（外部情報/未經本機驗證的坑）；無參數列出全部
   fixindex grep <keyword>       full-text ripgrep across fix files
   fixindex show <id>            cat fixes/NNNN-*.md
   fixindex list                 list all fix files with title
@@ -299,6 +300,25 @@ cmd_insights() {
   cmd_find "$@" --type insight
 }
 
+cmd_externals() {
+  if [[ $# -eq 0 ]]; then
+    # 無參數：列出全部 external 條目（id + title）
+    local f found=false
+    for f in "$FIXDIR"/[0-9]*.md; do
+      [[ -e "$f" ]] || continue
+      grep -q '^type:[[:space:]]*external' "$f" || continue
+      found=true
+      local base title
+      base=$(basename "$f" .md)
+      title=$(grep -m1 '^title:' "$f" | sed 's/^title:[[:space:]]*//; s/^"//; s/"$//')
+      printf "  %-40s  %s\n" "$base" "$title"
+    done
+    $found || echo "(no external entries yet — create one: fixindex new <slug> --type external)"
+    return 0
+  fi
+  cmd_find "$@" --type external
+}
+
 cmd_grep() {
   [[ $# -ge 1 ]] || die "usage: fixindex grep <keyword>"
   $RG -i --heading --line-number -F "$1" "$FIXDIR"/[0-9]*.md
@@ -332,9 +352,9 @@ cmd_new() {
         ;;
     esac
   done
-  [[ -n "$input" ]] || die "usage: fixindex new <slug> [--type defect|insight]"
-  if [[ "$etype" != "defect" && "$etype" != "insight" ]]; then
-    die "invalid --type '$etype' (must be defect or insight)"
+  [[ -n "$input" ]] || die "usage: fixindex new <slug> [--type defect|insight|external]"
+  if [[ "$etype" != "defect" && "$etype" != "insight" && "$etype" != "external" ]]; then
+    die "invalid --type '$etype' (must be defect, insight, or external)"
   fi
 
   local slug
@@ -378,6 +398,28 @@ related: []
 **Insight:** TODO
 **Implication:** TODO
 **Revisit-when:** TODO
+EOF
+  elif [[ "$etype" == "external" ]]; then
+    cat > "$newfile" <<EOF
+---
+id: $id
+slug: $slug
+type: external
+title: TODO
+source: TODO
+tags: [external]
+symptoms: []
+status: active
+supersedes: []
+related: []
+---
+# ${id} ${slug}
+
+## §1 外部情報（未經本機驗證）
+**Symptom:** \`可 grep 的症狀\`
+**Root cause:** TODO
+**Fix:** TODO
+**Verify:** TODO（本機如何檢測是否中招的可跑指令）
 EOF
   else
     cat > "$newfile" <<EOF
@@ -1682,6 +1724,7 @@ main() {
   case "$sub" in
     find)      sync_pull_soft; cmd_find "$@" ;;
     insights)  sync_pull_soft; cmd_insights "$@" ;;
+    externals) sync_pull_soft; cmd_externals "$@" ;;
     grep)      sync_pull_soft; cmd_grep "$@" ;;
     show)      sync_pull_soft; cmd_show "$@" ;;
     list)      sync_pull_soft; cmd_list ;;

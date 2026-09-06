@@ -392,7 +392,8 @@ def main():
         print(json.dumps({'query': q, 'hits': hits}, ensure_ascii=False))
     else:
         for e, s in top:
-            print(f"  {e['key']:<8} {_badge(e['trust_state'])} {e['section']:<5} ({s:4.2f})  {e['heading']}")
+            mark = " [ext]" if e['type'] == 'external' else ""
+            print(f"  {e['key']:<8} {_badge(e['trust_state'])} {e['section']:<5} ({s:4.2f}){mark}  {e['heading']}")
         print(f"\nmatched {len(results)} sections; showing top {len(top)}")
 
 
