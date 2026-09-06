@@ -237,6 +237,16 @@ def build_entries(fixdir):
         fn = os.path.basename(fp)
         fid = fn[:4]
         fm, body = _parse_file(fp)
+        # B1 (WO-2026-09-06)：frontmatter tokens 每檔只算一次，供所有 section 共用。
+        # 之前 _build_entry 對每個 ## § section 都重新 tokenize symptoms/tags
+        # （0001 有 55 個 section → 55 倍），是語料放大器的來源之一。
+        fm_toks = []
+        for sx in fm.get('symptoms', []):
+            ts = tokenize(sx)
+            fm_toks.extend(ts * 3)
+        for t in fm.get('tags', []):
+            ts = tokenize(t)
+            fm_toks.extend(ts * 2)
         # sections
         secs = []
         cur_h = cur_b = ''
@@ -258,30 +268,32 @@ def build_entries(fixdir):
             m = re.search(r'##\s*§\d+\s+(.+)', hd)
             heading = m.group(1).strip() if m else '(untitled)'
             bi = blurbs.get(key, {})
-            entries.append(_build_entry(fid, fn, sn + 1, heading, fm, bi, cont))
+            entries.append(_build_entry(fid, fn, sn + 1, heading, fm, bi, cont, fm_toks))
 
         # Fallback: files with frontmatter but no ## § sections (legacy format)
         # get a single whole-body entry so `find` can still reach them.
         if not secs and fm and (fm.get('symptoms') or fm.get('tags') or body.strip()):
             heading = str(fm.get('title') or '(untitled)')
-            entries.append(_build_entry(fid, fn, 1, heading, fm, {}, body))
+            entries.append(_build_entry(fid, fn, 1, heading, fm, {}, body, fm_toks))
     return entries
 
 
-def _build_entry(fid, fn, sn, heading, fm, bi, cont):
+def _build_entry(fid, fn, sn, heading, fm, bi, cont, fm_toks=None):
     toks = []
     # heading 2x
     to = tokenize(heading)
     toks += to + to
-    # symptoms 3x
-    for sx in fm.get('symptoms', []):
-        ts = tokenize(sx)
-        toks.extend(ts * 3)
-    # tags 1.5x
-    for t in fm.get('tags', []):
-        ts = tokenize(t)
-        toks.extend(ts)
-        toks.extend(ts)
+    # symptoms 3x + tags 2x：用 build_entries 預算好的 fm_toks（每檔一次），
+    # 不再對每個 section 重算（B1）
+    if fm_toks is None:
+        for sx in fm.get('symptoms', []):
+            ts = tokenize(sx)
+            toks.extend(ts * 3)
+        for t in fm.get('tags', []):
+            ts = tokenize(t)
+            toks.extend(ts * 2)
+    else:
+        toks.extend(fm_toks)
     # vocab 1.8x
     for v in bi.get('vocab', []):
         ts = tokenize(v)

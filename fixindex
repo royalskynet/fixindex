@@ -1125,19 +1125,25 @@ fixindex doctor — diagnose and repair corrupted frontmatter
 
 Usage:
   fixindex doctor        diagnose only (read-only)
-  fixindex doctor --fix  auto-repair categories 1-2
+  fixindex doctor --fix  auto-repair categories 1-2,8
   fixindex doctor --help this message
 
-Checks 5 categories:
+Checks:
   1. Wrapped frontmatter (memory-node schema with metadata: block)
   2. ID mismatch (filename vs frontmatter id:)
   3. Duplicate IDs (multiple files with same 4-digit prefix)
   4. Stub entries (empty or TODO title)
   5. Filenames with spaces
+  6. Missing sections (non-stub without any ## §N headings)
+  7. (retired 2026-08-28 — truncation fingerprint no longer meaningful)
+  8. Vestigial tags (auto/shadow)
+  9. Runaway symptoms (symptom item >400 chars / 4+ consecutive backslashes / file >500KB; report only)
+  ⚠  E2E junk slugs (warning only)
+  ⚠  Routing black holes (warning only)
 
 Auto-repairs with --fix:
-  Categories 1-2 are auto-repaired. Categories 3-5 are reported only
-  (require manual judgment to avoid breaking cross-references).
+  Categories 1-2 and 8 are auto-repaired. Categories 3-6 and 9 are reported
+  only (require manual judgment to avoid breaking cross-references or content).
 
 Exit codes:
   0 = all clear or repair successful
@@ -1147,7 +1153,7 @@ EOF
 
 _cmd_doctor_check() {
   # Diagnose mode: read-only reporting
-  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() vestigial_list=() junk_list=() trunc_list=()
+  local wrapped_list=() mismatch_list=() stub_list=() space_list=() missing_list=() vestigial_list=() junk_list=() trunc_list=() runaway_list=()
   local files_checked=0
 
   # Scan all fix files
@@ -1276,6 +1282,34 @@ for fp in sorted(glob.glob(os.path.join(sys.argv[1], '[0-9]*.md'))):
 PYEOF
   )
 
+  # Check 9 (B2, WO-2026-09-06): runaway symptoms —— 只報不修（--fix 不會碰，會砍到內容）
+  # 三種病態指紋：symptoms 項 >400 字／4+ 連續反斜線／檔案 >500KB。
+  # 單一 python 掃全部（與 Check 10 路由黑洞同模式），避免逐檔 spawn。
+  local runaway_list=()
+  while IFS= read -r line; do [[ -n "$line" ]] && runaway_list+=("$line"); done < <(
+    python3 - "$FIXDIR" "$FX_DIR" <<'PYEOF' 2>/dev/null
+import sys, os, glob
+sys.path.insert(0, sys.argv[2])
+import fxmeta
+d = sys.argv[1]
+for fp in sorted(glob.glob(os.path.join(d, '[0-9]*.md'))):
+    n = os.path.basename(fp)
+    try:
+        txt = open(fp, encoding='utf-8').read()
+    except Exception:
+        continue
+    fm, _ = fxmeta.parse_frontmatter_full(txt)
+    for sx in (fm.get('symptoms') or []):
+        if isinstance(sx, str) and len(sx) > 400:
+            print(f"{n}: symptom item too long (len={len(sx)})")
+    if '\\\\\\\\' in txt:
+        print(f"{n}: backslash run")
+    sz = os.path.getsize(fp)
+    if sz > 500000:
+        print(f"{n}: file size {sz}")
+PYEOF
+  )
+
   # Report issues
   local has_issues=false
 
@@ -1332,14 +1366,21 @@ PYEOF
     printf '  %s\n' "${holes[@]}"
   fi
 
+  # Check 9 (B2) 報告：runaway symptoms —— 計入 has_issues / total_issues，--fix 不自動修
+  if [[ ${#runaway_list[@]} -gt 0 ]]; then
+    has_issues=true
+    echo "runaway symptoms (${#runaway_list[@]} files, report only — --fix 不會自動修，避免砍到內容):"
+    printf '  %s\n' "${runaway_list[@]}"
+  fi
+
   # Summary
   if [[ "$has_issues" == "false" ]]; then
     echo "doctor: all clear ($files_checked files checked)"
     return 0
   else
-    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]} + ${#missing_list[@]} + ${#trunc_list[@]} + ${#vestigial_list[@]}))
+    local total_issues=$((${#wrapped_list[@]} + ${#mismatch_list[@]} + ${#dup_list[@]} + ${#stub_list[@]} + ${#space_list[@]} + ${#missing_list[@]} + ${#trunc_list[@]} + ${#vestigial_list[@]} + ${#runaway_list[@]}))
     echo ""
-    echo "doctor: 8 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2,8)"
+    echo "doctor: 9 checks, $total_issues issues found (run \`fixindex doctor --fix\` to auto-repair categories 1-2,8; runaway symptoms 只報不修)"
     return 1
   fi
 }
