@@ -3,6 +3,8 @@
 # Usage: fixindex {find|grep|show|new|re-index|supersede|help} ...
 
 set -euo pipefail
+# ponytail: 沙箱擋 huggingface.co，模型已在 ~/.cache/huggingface；有快取就離線，省 5 次 retry ~30s（0779）
+[ -d "$HOME/.cache/huggingface/hub/models--minishlab--potion-multilingual-128M" ] && export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 
 # brew python@3.14/@3.12 的 pyexpat 連到 macOS 26 的舊版 /usr/lib/libexpat.1.dylib，
 # 符號對不上 → import xml 掛掉 → pip 無法啟動 → 這顆 python 永遠裝不了 pyyaml。
