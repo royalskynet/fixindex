@@ -228,6 +228,7 @@ def find_domain_file_auto(title, symps, etype='defect'):
     matches are treated as ambiguous and a fresh file is created instead of
     polluting an existing one.
     """
+    title_toks = set(_word_tokens(title))
     cand = list(dict.fromkeys(_word_tokens(title) + (_word_tokens(symps[0]) if symps else [])))
     if not cand:
         return None
@@ -247,8 +248,12 @@ def find_domain_file_auto(title, symps, etype='defect'):
         if str(fm.get('type') or 'defect') != etype:
             continue
         s = slug.lower()
+        # 裸詞 slug（無 `-`，如 0001-hermes 這類刻意領域桶）只認 title 的 token：
+        # symptom 順帶一句「父 process 是 hermes gateway」就把整條吸進桶裡（0853，
+        # 0001 已中兩次）。多詞 slug 不受影響，維持 title ∪ symptom。
+        bare = '-' not in s
         for t in set(cand):
-            if t == s:
+            if t == s and (not bare or t in title_toks):
                 g1[fp] = g1.get(fp, 0) + 1
             # 短 token（<5 字）不做 dash-prefix 匹配：單詞 slug 常是常見詞
             # （test/fix/git/note…），prefix 命中等同亂猜，污染既有條目
