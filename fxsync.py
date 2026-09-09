@@ -204,12 +204,34 @@ def flush_pending(fixdir):
     return {'flushed': True, 'offline': False, 'detail': 'flushed', 'marker': None}
 
 
+def _git_dir_readonly(root):
+    """探測 <root>/.git 是否唯讀（如 Claude Code 沙箱把 projects/** 設 deny write）。
+
+    真的嘗試建檔＋刪檔（O_CREAT|O_EXCL），不用 os.access() —— 這台機器的沙箱有
+    「syscall 回報成功、事後靜默回滾」的前科，os.access() 測不出來。"""
+    git_dir = os.path.join(root, '.git')
+    probe = os.path.join(git_dir, f'.fxsync-write-probe.{os.getpid()}')
+    try:
+        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        return True
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(probe)
+    except OSError:
+        pass
+    return False
+
+
 def pull(fixdir, soft=False):
     """寫入前 pull-first（含離線積壓補推）。回傳 {ok, skipped, reason, stderr}。
 
-    skipped=True = 不需 sync（no-sync / 巢狀 / 非 git / 無 upstream），非錯誤。
-    ok=False = 硬失敗（conflict/fatal），呼叫端應 die。offline 對硬 pull 也不 die
-    （離線可寫入本地，由後續 push 累積 pending marker）。"""
+    skipped=True = 不需 sync（no-sync / 巢狀 / 非 git / 無 upstream / 唯讀沙箱），
+    非錯誤。ok=False = 硬失敗（conflict/fatal），呼叫端應 die。offline 對硬 pull
+    也不 die（離線可寫入本地，由後續 push 累積 pending marker）。"""
     if _sync_disabled() or _nested_skip():
         return {'ok': True, 'skipped': True, 'reason': 'no-sync-or-nested', 'stderr': ''}
     root = repo_root(fixdir)
@@ -217,6 +239,11 @@ def pull(fixdir, soft=False):
         return {'ok': True, 'skipped': True, 'reason': 'not-a-git-repo', 'stderr': ''}
     if not has_upstream(root):
         return {'ok': True, 'skipped': True, 'reason': 'no-upstream', 'stderr': ''}
+    if _git_dir_readonly(root):
+        if os.environ.get('FIXINDEX_DEBUG') == '1':
+            print(f"fixindex: debug — {root}/.git 唯讀（沙箱），略過 pull",
+                  file=sys.stderr)
+        return {'ok': True, 'skipped': True, 'reason': 'readonly-sandbox', 'stderr': ''}
     if not soft:
         flush_pending(fixdir)
     rc, out, err = _run(['git', '-C', root, 'pull', '--rebase', '--autostash'])

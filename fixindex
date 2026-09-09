@@ -666,7 +666,6 @@ _fi_defer_if_readonly() {
   {
     echo '#!/bin/bash'
     echo '# fixindex 寫入被沙箱擋（FIXINDEX_DIR 唯讀），由 boot-guard 沙箱外代跑；跑完刪 spool'
-    echo 'set -x'
     printf "export FIXINDEX_DIR='%s'\n" "$FIXDIR"
     echo 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"'
     # 不用 %q：bash 3.2 會把 UTF-8 轉成 $'\211\213' 八進位，人眼不可讀；改單引號包
