@@ -628,6 +628,9 @@ cmd_fi() {
     return 0
   fi
   # Legacy: fi <domain>
+  # 2026-09-10：0417 的沙箱唯讀延後原本只掛零參數路徑；這裡不掛時 with_lock 會把
+  # mkdir 的 EPERM 當鎖佔用，誤報「lock timeout after 10s」。
+  _fi_defer_if_readonly fi "$@" && return 0
   local domain="$1"
   # Disallow flags as the domain argument.
   if [[ "$domain" == -* ]]; then
@@ -661,22 +664,10 @@ _fi_defer_if_readonly() {
   [[ -d "$oneshot" ]] || return 1
   local spool="$oneshot/.spool"; mkdir -p "$spool" || return 1
   local ts; ts="$(date +%Y%m%d-%H%M%S)-$$"
-  local input="$spool/fi-$ts.txt" script="$oneshot/fi-deferred-$ts.sh"
+  local input="$spool/fi-$ts.txt" args="$spool/fi-$ts.args"
   if [[ ! -t 0 ]]; then cat > "$input"; else : > "$input"; fi
-  {
-    echo '#!/bin/bash'
-    echo '# fixindex 寫入被沙箱擋（FIXINDEX_DIR 唯讀），由 boot-guard 沙箱外代跑；跑完刪 spool'
-    printf "export FIXINDEX_DIR='%s'\n" "$FIXDIR"
-    echo 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"'
-    # 不用 %q：bash 3.2 會把 UTF-8 轉成 $'\211\213' 八進位，人眼不可讀；改單引號包
-    printf 'fixindex'; local a; for a in "$@"; do printf " '%s'" "${a//\'/\'\\\'\'}"; done
-    printf " < '%s'\n" "$input"
-    echo 'rc=$?; echo "fi-exit=$rc"'
-    printf "[ \"\$rc\" -eq 0 ] && rm -f '%s'\n" "$input"
-    echo 'exit $rc'
-  } > "$script"
-  chmod +x "$script"
-  printf '{"deferred": true, "oneshot": "%s", "input": "%s", "log": "%s/Library/Logs/openclaw/gateway-boot-guard.log", "note": "FIXINDEX_DIR 唯讀（沙箱）；boot-guard 60s 內代跑，結果看 log 的 fi-exit="}\n' "$script" "$input" "$HOME"
+  printf '%s\n' "$@" > "$args"
+  printf '{"deferred": true, "next": "fi-flush", "args": "%s", "input": "%s", "log": "%s/Library/Logs/openclaw/wrappers.log", "note": "FIXINDEX_DIR 唯讀（沙箱）；fi-flush 消化 spool"}\n' "$args" "$input" "$HOME"
   return 0
 }
 
