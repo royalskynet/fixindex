@@ -676,11 +676,12 @@ _cmd_fi_auto() {
   # 當次 session transcript 定位：agent 依此路徑讀本 session 挖洞見/症狀，不自動抽。
   # 由 commands/fi.md 定義該怎麼挖；這裡只秀路徑讓 agent 有處可讀。
   if [[ -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
-    local _sid="$CLAUDE_CODE_SESSION_ID"
-    local _base="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/-Users-${USER}"
-    if [[ -f "$_base/$_sid.jsonl" ]]; then
+    # project 目錄名由 session 的 cwd 決定（-Users-51mini-dev-fixindex 等），不能寫死 → 跨 projects/ 找。
+    local _tr
+    _tr="$(ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$CLAUDE_CODE_SESSION_ID.jsonl" 2>/dev/null | head -1)"
+    if [[ -n "$_tr" ]]; then
       cat >&2 <<EOF
-[fi] 當次 session transcript: $_base/$_sid.jsonl
+[fi] 當次 session transcript: $_tr
 依 commands/fi.md 掃本 session 挖 insights/symptoms -> fixindex find/insights 去重 -> pipe 給 fixindex fi。
 EOF
     fi
@@ -1718,8 +1719,10 @@ fixindex 首次使用引導：
   authoring 規則（do-not-write / 正確管道）   → fixes/.template.md
   權威撰寫紀律（Edit/Write 禁令、fi 用法）    → feedback_fixindex.md（memory 根）
   fi 自動掃當次 session 洞見 → fixindex fi（見 commands/fi.md）
-（讀過後 touch ~/.local/state/fixindex/guide-seen 不再顯示；或 FIXINDEX_GUIDE_SEEN=1）
+（本次已標記為已讀，之後不再顯示；強制隱藏可設 FIXINDEX_GUIDE_SEEN=1）
 EOF
+  # 無頭環境不能要求使用者手動 touch → 印完即自標已讀，真正做到「首見一次」。
+  mkdir -p "${seen%/*}" 2>/dev/null && : >"$seen" 2>/dev/null || true
 }
 
 main() {
