@@ -46,6 +46,7 @@ fixes_edited = False
 mutated = False
 debug_evidence = False
 tool_calls = 0
+assistant_turns = 0
 
 try:
     with open(tp, encoding='utf-8', errors='replace') as f:
@@ -60,6 +61,8 @@ try:
             t = rec.get('type')
             msg = rec.get('message')
             blocks = msg.get('content') if isinstance(msg, dict) else None
+            if t == 'assistant':
+                assistant_turns += 1
             if t == 'assistant' and isinstance(blocks, list):
                 for b in blocks:
                     if not isinstance(b, dict):
@@ -135,6 +138,11 @@ if fi_called or git_commit_seen or fixes_edited:
                 '落後 remote 先 `git pull --rebase --autostash`；'
                 '若確認無需同步，一句話說明後即可停。')
         remind(reason)
+
+# ---- 長 session 催換（一題一 session，token-partitioned-sutton）----
+# 60 turn 起每 15 turn 提醒一次；advisory，不 deny。
+if assistant_turns >= 60 and assistant_turns % 15 == 0:
+    remind(f'本 session 已 {assistant_turns} turn：換題請 `fts new`；同題續做可 /compact；搜尋類派工 deep。')
 
 # ---- 規模門檻：小任務不值得 fi 成本 ----
 THRESHOLD = 40
