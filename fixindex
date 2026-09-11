@@ -673,6 +673,19 @@ _fi_defer_if_readonly() {
 
 # 零參數 fi / auto 共用：全自動管線（fxauto.py --commit）
 _cmd_fi_auto() {
+  # 當次 session transcript 定位：agent 依此路徑讀本 session 挖洞見/症狀，不自動抽。
+  # 由 commands/fi.md 定義該怎麼挖；這裡只秀路徑讓 agent 有處可讀。
+  if [[ -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
+    # project 目錄名由 session 的 cwd 決定（-Users-51mini-dev-fixindex 等），不能寫死 → 跨 projects/ 找。
+    local _tr
+    _tr="$(ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$CLAUDE_CODE_SESSION_ID.jsonl" 2>/dev/null | head -1)"
+    if [[ -n "$_tr" ]]; then
+      cat >&2 <<EOF
+[fi] 當次 session transcript: $_tr
+依 commands/fi.md 掃本 session 挖 insights/symptoms -> fixindex find/insights 去重 -> pipe 給 fixindex fi。
+EOF
+    fi
+  fi
   local self="${BASH_SOURCE[0]}"
   [[ -L "$self" ]] && self="$(readlink "$self")"
   local fxauto="${self%/*}/fxauto.py"
@@ -1695,6 +1708,23 @@ _cmd_status_fxstatus() {
   cmd_status_lint "$@"
 }
 
+_maybe_banner() {
+  # 首次使用引導：指出 authoring 規則與權威紀律的所在，別讓使用者自己翻。
+  [[ "${1:-}" == "help" || "${1:-}" == "-h" || "${1:-}" == "--help" ]] && return 0
+  [[ -n "${FIXINDEX_GUIDE_SEEN:-}" ]] && return 0
+  local seen="$HOME/.local/state/fixindex/guide-seen"
+  [[ -f "$seen" ]] && return 0
+  cat >&2 <<'EOF'
+fixindex 首次使用引導：
+  authoring 規則（do-not-write / 正確管道）   → fixes/.template.md
+  權威撰寫紀律（Edit/Write 禁令、fi 用法）    → feedback_fixindex.md（memory 根）
+  fi 自動掃當次 session 洞見 → fixindex fi（見 commands/fi.md）
+（本次已標記為已讀，之後不再顯示；強制隱藏可設 FIXINDEX_GUIDE_SEEN=1）
+EOF
+  # 無頭環境不能要求使用者手動 touch → 印完即自標已讀，真正做到「首見一次」。
+  mkdir -p "${seen%/*}" 2>/dev/null && : >"$seen" 2>/dev/null || true
+}
+
 main() {
   # 逃生門：--no-sync 在 arg list 任意位置剝除 → export 給整棵處理樹（fxauto 也會讀），集中判斷。
   local args=() a
@@ -1710,6 +1740,7 @@ main() {
   # fxsync.child_env() 升到 ≥2 → 自動啞（消除雙 commit，不靠各處手動傳 flag）。
   export FIXINDEX_SYNC_DEPTH=1
   local sub="${1:-help}"
+  _maybe_banner "$sub"
   shift || true
   case "$sub" in
     find)      sync_pull_soft; cmd_find "$@" ;;
