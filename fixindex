@@ -630,7 +630,8 @@ cmd_fi() {
   # Legacy: fi <domain>
   # 2026-09-10：0417 的沙箱唯讀延後原本只掛零參數路徑；這裡不掛時 with_lock 會把
   # mkdir 的 EPERM 當鎖佔用，誤報「lock timeout after 10s」。
-  _fi_defer_if_readonly fi "$@" && return 0
+  _fi_d=0; _fi_defer_if_readonly fi "$@" || _fi_d=$?
+  if [[ $_fi_d -eq 75 ]]; then return 75; fi
   local domain="$1"
   # Disallow flags as the domain argument.
   if [[ "$domain" == -* ]]; then
@@ -668,7 +669,11 @@ _fi_defer_if_readonly() {
   if [[ ! -t 0 ]]; then cat > "$input"; else : > "$input"; fi
   printf '%s\n' "$@" > "$args"
   printf '{"deferred": true, "next": "fi-flush", "args": "%s", "input": "%s", "log": "%s/Library/Logs/openclaw/wrappers.log", "note": "FIXINDEX_DIR 唯讀（沙箱）；fi-flush 消化 spool"}\n' "$args" "$input" "$HOME"
-  return 0
+  echo "fixindex: DEFERRED（未落地）— FIXINDEX_DIR 唯讀，已排進 spool，需沙箱外 fi-flush 消化" >&2
+  # 0912: 這裡曾 return 0。fi-flush 只看 rc，rc=0 → 刪掉 spool pair 並記 "clean rc=0"，
+  # 但同一次呼叫又在沙箱內重新 defer 出一筆新的 → 刪一筆生一筆、log 全綠、零筆落地。
+  # 改回 75(EX_TEMPFAIL)：fi-flush 不刪檔，呼叫端也看得到「沒寫成功」。
+  return 75
 }
 
 # 零參數 fi / auto 共用：全自動管線（fxauto.py --commit）
@@ -690,7 +695,8 @@ EOF
   [[ -L "$self" ]] && self="$(readlink "$self")"
   local fxauto="${self%/*}/fxauto.py"
   [[ -f "$fxauto" ]] || die "fxauto.py not found next to fixindex: $fxauto"
-  _fi_defer_if_readonly fi && return 0
+  _fi_d=0; _fi_defer_if_readonly fi || _fi_d=$?
+  if [[ $_fi_d -eq 75 ]]; then return 75; fi
   FIXINDEX_DIR="$FIXDIR" python3 "$fxauto" --commit
 }
 
@@ -1655,7 +1661,8 @@ EOF
   local body="" mode="--commit"
   [[ "$shadow" == "1" ]] && mode="--shadow"
   if [[ "$shadow" != "1" ]]; then
-    _fi_defer_if_readonly auto ${orig_args[@]+"${orig_args[@]}"} && return 0
+    _fi_d=0; _fi_defer_if_readonly auto ${orig_args[@]+"${orig_args[@]}"} || _fi_d=$?
+    if [[ $_fi_d -eq 75 ]]; then return 75; fi
   fi
   if [[ ! -t 0 ]]; then
     body=$(cat)

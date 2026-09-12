@@ -29,7 +29,7 @@ if tp == '-' or not tp or not os.path.isfile(tp):
 # ---- 解析 transcript JSONL：只看 Bash tool_use 的 input.command（不看 hook 自己的 reason）----
 FI_RE = re.compile(r'\bfixindex\s+(fi|new|auto)\b')
 GIT_RE = re.compile(r'\bgit\b[^\n;|&]*\b(commit|push)\b')
-FIXES_PATH_RE = re.compile(r'/memory/fixes/[^/]+\.md$')
+FIXES_PATH_RE = re.compile(r'/fix-store/fixes/[^/]+\.md$')  # 0912: 倉庫搬出 ~/.claude
 DEBUG_RE = re.compile(
     r'\b(root cause|regression)\b|根因|修好|修復|除錯完成|已修正|bug\s*fix|fixed\s+the\b', re.I)
 # 不算「動過東西」的寫入目標：計畫／工單／報告草稿、暫存區。談論 defect 而只寫這些檔的
