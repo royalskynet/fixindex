@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # fi-reminder.sh — Claude Code Stop hook（fixindex 收尾 fi 提醒 + git 同步閘門）。
-# 兩件事：
+# 三件事：
 #   【閘門】若本次有 git commit/push 跡象但 fixindex status 非 clean（含離線積壓
-#          pending_push）→ block，物理上擋下「commit 完沒同步就宣告完成」。
-#   【提醒】若非小任務（tool_use ≥ threshold）且有除錯/修復跡象、但沒呼叫
-#          fixindex fi/new/auto 記入 → block 強制補記。
-# 一律輸出合法單行 JSON（decision: block/allow）。
+#          pending_push）→ 提醒（v5 abolish 後不 block），指示如何補同步。
+#   【長 session 催換】60 turn 起每 15 turn 提醒一次（advisory）。
+#   【疑似修過 defect 未記】非小任務（tool_use ≥ threshold）且有除錯/修復跡象、
+#          沒呼叫 fixindex fi/new/auto 或用 Skill fi → 一次性 block，強制直接跑 /fi。
+# 一律輸出合法單行 JSON（decision: block/allow 或 continue:true systemMessage）。
 # stop_hook_active=true 表示已 block 過一輪 → 靜默放行，防無限迴圈。
 # 由 Claude Code 掛在 settings.json "hooks"."Stop"。
 
@@ -28,6 +29,7 @@ if tp == '-' or not tp or not os.path.isfile(tp):
 
 # ---- 解析 transcript JSONL：只看 Bash tool_use 的 input.command（不看 hook 自己的 reason）----
 FI_RE = re.compile(r'\bfixindex\s+(fi|new|auto)\b')
+SKILL_FI_RE = re.compile(r'^/?fi\b', re.I)  # Skill tool_use 的 skill 旗標（/fi 或 fi）
 GIT_RE = re.compile(r'\bgit\b[^\n;|&]*\b(commit|push)\b')
 FIXES_PATH_RE = re.compile(r'/fix-store/fixes/[^/]+\.md$')  # 0912: 倉庫搬出 ~/.claude
 DEBUG_RE = re.compile(
@@ -77,6 +79,11 @@ try:
                             if GIT_RE.search(cmd):
                                 git_commit_seen = True
                                 mutated = True
+                        elif b.get('name') == 'Skill':
+                            inp = b.get('input')
+                            if isinstance(inp, dict):
+                                if SKILL_FI_RE.search(str(inp.get('skill') or '')):
+                                    fi_called = True
                         elif b.get('name') in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
                             inp = b.get('input')
                             fp = str(inp.get('file_path') or '') if isinstance(inp, dict) else ''
@@ -96,6 +103,13 @@ def remind(reason):
     # 不再阻斷；保留事實查核計算，只印 [FI-REMIND] systemMessage 後結束。
     print(json.dumps({'continue': True, 'suppressOutput': True,
                       'systemMessage': '[FI-REMIND] ' + reason}, ensure_ascii=False))
+    sys.exit(0)
+
+
+def stop_block(reason):
+    # E2（Astra 審查 2026-09-14）：疑似修過 defect 未記 → 一次性 block，強制直接跑 /fi。
+    # stop_hook_active=true 時頂端守衛已靜默放行，故不會每輪重複擋。
+    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     sys.exit(0)
 
 
@@ -153,9 +167,7 @@ if tool_calls < THRESHOLD:
 # 需要「談到 defect」+「真的動過檔案」兩個證據同時成立。只有文字證據時，
 # 稽核／規劃／寫工單這類純討論輪會滿篇 fix/根因/error 而被誤擋。
 if debug_evidence and mutated and not fi_called:
-    remind('fi-reminder: 本次疑似修過 defect，但未見 fixindex fi/new/auto 記入。'
-          '補記（printf "SYMPTOM: ...\\nFIX: ..." | fixindex fi，含實測數據與無效嘗試）；'
-          '若確實無 defect 可記，一句話說明後即可停。')
+    stop_block('本 session 疑似修過 defect 未記：直接跑 /fi（掃描去重後自動記入；無可記則一句帶過即停）')
 
 sys.exit(0)
 PYEOF
