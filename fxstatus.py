@@ -14,6 +14,7 @@ Usage:
 
 語意：error → exit 非 0；warning → 標出但 exit 0。
 """
+import re
 import json
 import os
 import sys
@@ -78,6 +79,7 @@ def lint_state(fixdir):
     s = {"errors": []}
     if not fixdir.is_dir():
         return s
+    known = {f.name[:4] for f in fixdir.glob("[0-9][0-9][0-9][0-9]-*.md")}
     for f in sorted(fixdir.glob("[0-9][0-9][0-9][0-9]-*.md")):
         text = f.read_text(encoding="utf-8", errors="replace")
         fm, _ = fxmeta.parse_frontmatter_full(text)
@@ -90,6 +92,17 @@ def lint_state(fixdir):
         # supersedes 語意是「本條目取代了誰」；只有兩欄都空才是真異常。
         if status == "superseded" and not supersedes and not superseded_by:
             s["errors"].append(f"{f.name}: status=superseded 但 supersedes 與 superseded_by 皆空")
+        # 自指與斷鏈：0567 曾寫成 superseded_by 自己，鏈斷了也沒人發現。
+        me = f.name[:4]
+        for tgt in list(supersedes) + ([superseded_by] if superseded_by else []):
+            m = re.match(r"(\d{4})", str(tgt).strip().strip('"\'[]'))
+            if not m:      # "[]"、自由文字等非 id 值一律略過
+                continue
+            tgt = m.group(1)   # "0281-§3" 這類帶後綴的取前四碼
+            if tgt == me:
+                s["errors"].append(f"{f.name}: supersede 指向自己（{me}）")
+            elif tgt not in known:
+                s["errors"].append(f"{f.name}: supersede 指向不存在的 {tgt}")
     return s
 
 

@@ -26,6 +26,13 @@ FIXINDEX_DIR = os.environ.get('FIXINDEX_DIR',
 
 # 去個案化：同主題（新舊 tgt⊆ts 或 overlap >= 門檻）即視為重複經驗
 OVERLAP_THRESHOLD = 0.6
+# Dedup guards (2026-09-21, fix 9299). The ratio below is over the OLD title's
+# token count, so a stub title is trivially "covered" by any longer new one; and
+# the CJK tokenizer emits bigrams, so one shared 3-char word already yields two
+# matching tokens. Without these floors, `沙箱內 python3…` (3 tokens) got
+# superseded by an unrelated entry sharing only the word 沙箱 (ratio 2/3).
+MIN_OLD_TITLE_TOKENS = 6   # too short to judge -- never auto-supersede it
+MIN_ABS_OVERLAP = 3        # >= ~2 real words, not one word counted twice as bigrams
 
 
 def _q(s):
@@ -456,10 +463,13 @@ def find_duplicate(title, etype='defect'):
             continue
         t = fm.get('title') or os.path.basename(fp)
         ts = _title_tokens(str(t))
-        if not ts:
+        if not ts or len(ts) < MIN_OLD_TITLE_TOKENS:
             continue
-        if tgt <= ts or (len(tgt & ts) / len(ts) >= OVERLAP_THRESHOLD):
-            overlap = len(tgt & ts) / len(ts)   # 新詞涵蓋舊標題比例
+        inter = len(tgt & ts)
+        if inter < MIN_ABS_OVERLAP:
+            continue
+        if tgt <= ts or (inter / len(ts) >= OVERLAP_THRESHOLD):
+            overlap = inter / len(ts)   # 新詞涵蓋舊標題比例
             if best is None or overlap > best[1]:
                 best = (os.path.basename(fp)[:4], round(overlap, 2))
     return best
