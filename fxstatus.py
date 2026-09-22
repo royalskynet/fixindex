@@ -74,35 +74,52 @@ def index_state(fixdir, index):
 
 
 def lint_state(fixdir):
-    """③ lint：superseded 但 supersedes 兩欄皆空 → error（0452 形態）。
+    """③ lint：superseded 但 supersedes 兩欄皆空 → error（0452 形態）；自指／斷鏈 → error。
+    2026-09-22 加雙向同步 warning：A.supersedes B 但 B 未標 superseded；B.superseded_by A 但
+    A.supersedes 未列 B；superseded 檔把接手者寫進 supersedes（方向反寫）。
     解析統一走 fxmeta（不重造 regex；supersedes 單值/block 都吃）。"""
-    s = {"errors": []}
+    s = {"errors": [], "warnings": []}
     if not fixdir.is_dir():
         return s
-    known = {f.name[:4] for f in fixdir.glob("[0-9][0-9][0-9][0-9]-*.md")}
+    rows = {}
     for f in sorted(fixdir.glob("[0-9][0-9][0-9][0-9]-*.md")):
         text = f.read_text(encoding="utf-8", errors="replace")
         fm, _ = fxmeta.parse_frontmatter_full(text)
-        status = str(fm.get("status") or "").strip().strip('"\'')
+        status = str(fm.get("status") or "").strip().strip('"\'').split()[0] if fm.get("status") else ""
         supersedes = fm.get("supersedes") or []
         if isinstance(supersedes, str):
             supersedes = [supersedes] if supersedes.strip() else []
-        superseded_by = str(fm.get("superseded_by") or "").strip().strip('"\'')
+        ids = []
+        for tgt in supersedes:
+            m = re.match(r"(\d{4})", str(tgt).strip().strip('"\'[]'))
+            if m:      # "[]"、自由文字等非 id 值一律略過；"0281-§3" 取前四碼
+                ids.append(m.group(1))
+        by = str(fm.get("superseded_by") or "").strip().strip('"\'')
+        m = re.match(r"(\d{4})", by)
+        rows[f.name[:4]] = {"name": f.name, "status": status, "sup": ids, "by": m.group(1) if m else ""}
+    known = set(rows)
+    for me, r in rows.items():
         # 被取代的 stub（空殼佔位）用 superseded_by 表達「被誰取代」——合法。
         # supersedes 語意是「本條目取代了誰」；只有兩欄都空才是真異常。
-        if status == "superseded" and not supersedes and not superseded_by:
-            s["errors"].append(f"{f.name}: status=superseded 但 supersedes 與 superseded_by 皆空")
+        if r["status"] == "superseded" and not r["sup"] and not r["by"]:
+            s["errors"].append(f"{r['name']}: status=superseded 但 supersedes 與 superseded_by 皆空")
         # 自指與斷鏈：0567 曾寫成 superseded_by 自己，鏈斷了也沒人發現。
-        me = f.name[:4]
-        for tgt in list(supersedes) + ([superseded_by] if superseded_by else []):
-            m = re.match(r"(\d{4})", str(tgt).strip().strip('"\'[]'))
-            if not m:      # "[]"、自由文字等非 id 值一律略過
-                continue
-            tgt = m.group(1)   # "0281-§3" 這類帶後綴的取前四碼
+        for tgt in r["sup"] + ([r["by"]] if r["by"] else []):
             if tgt == me:
-                s["errors"].append(f"{f.name}: supersede 指向自己（{me}）")
+                s["errors"].append(f"{r['name']}: supersede 指向自己（{me}）")
             elif tgt not in known:
-                s["errors"].append(f"{f.name}: supersede 指向不存在的 {tgt}")
+                s["errors"].append(f"{r['name']}: supersede 指向不存在的 {tgt}")
+        # 雙向同步（warning：需逐對判斷，不自動 fail）
+        for tgt in r["sup"]:
+            t = rows.get(tgt)
+            if not t or t["status"] == "superseded":
+                continue
+            if r["status"] == "superseded" and not r["by"]:
+                s["warnings"].append(f"{r['name']}: 已 superseded 卻把仍 active 的 {tgt} 寫在 supersedes——方向反寫，應為 superseded_by")
+            else:
+                s["warnings"].append(f"{r['name']}: supersedes {tgt} 但 {tgt} 仍 status={t['status'] or '?'}（fixindex supersede {tgt} {me}）")
+        if r["by"] and r["by"] in rows and me not in rows[r["by"]]["sup"]:
+            s["warnings"].append(f"{r['name']}: superseded_by {r['by']} 但 {r['by']} 的 supersedes 未列 {me}")
     return s
 
 
