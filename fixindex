@@ -1751,7 +1751,8 @@ main() {
       args+=("$a")
     fi
   done
-  set -- "${args[@]}"
+  # ponytail: bash 3.2 set -u 下空陣列展開即 unbound，${a+"${a[@]}"} 是唯一可攜寫法
+  set -- ${args[@]+"${args[@]}"}
   # 深度守衛：最外層命令設 1 並 export；fxauto 反呼的內層 re-index/supersede 由
   # fxsync.child_env() 升到 ≥2 → 自動啞（消除雙 commit，不靠各處手動傳 flag）。
   export FIXINDEX_SYNC_DEPTH=1
