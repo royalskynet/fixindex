@@ -154,8 +154,12 @@ if fi_called or git_commit_seen or fixes_edited:
         remind(reason)
 
 # ---- 長 session 催換（一題一 session，token-partitioned-sutton）----
-# 60 turn 起每 15 turn 提醒一次；advisory，不 deny。
-if assistant_turns >= 60 and assistant_turns % 15 == 0:
+# 60 turn 起每 15 turn 提醒一次；advisory，不 deny。以 mark 檔記上一回提醒 turn，防多 session 共檔狂刷。
+_mark = os.path.expanduser(f'~/.claude/guard-state/turns-reminded-{os.path.basename(tp)[:8]}')
+try: _last = int(open(_mark).read())
+except Exception: _last = 0
+if assistant_turns >= 60 and assistant_turns - _last >= 15:
+    open(_mark, 'w').write(str(assistant_turns))
     remind(f'本 session 已 {assistant_turns} turn：換題請 `fts new`；同題續做可 /compact；搜尋類派工 deep。')
 
 # ---- 規模門檻：小任務不值得 fi 成本 ----
