@@ -71,6 +71,15 @@ fi
 RG="${RG:-rg}"
 FIXDIR_IS_DEFAULT=$([[ "$FIXDIR_SOURCE" == cwd ]] && echo 1 || echo 0)
 
+# ponytail: /bin/bash 3.2 puts here-document temp files in $PWD, not $TMPDIR (fix 0926).
+# A sandbox write-denied cwd (~/.claude/projects/**) kills every <<EOF below at an
+# unrelated line. Every path above is absolute by now, so hop to a writable dir once.
+if _p=$(mktemp ".fixindex-cwd-probe.XXXXXX" 2>/dev/null); then
+  rm -f "$_p"; unset _p
+else
+  cd "${TMPDIR:-/tmp}" 2>/dev/null || cd /
+fi
+
 die() { echo "fixindex: $*" >&2; exit 1; }
 
 # ===== sync 層（0171/0467：單一同步權威 fxsync.py；消雙 commit / 真逃生門 / 離線分級）=====
