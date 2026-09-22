@@ -320,6 +320,9 @@ def _build_entry(fid, fn, sn, heading, fm, bi, cont, fm_toks=None):
         'trust_state': state,
         'last_verified': last,
         'outcome': outcome,
+        # file-level status: superseded files rank half and badge [X] (2026-09-22)
+        'superseded': str(fm.get('status') or '').strip().startswith('superseded'),
+        'supersedes': [str(x).strip().strip('"\'') for x in (fm.get('supersedes') or [])],
     }
 
 
@@ -372,13 +375,19 @@ def main():
         return
     bm = BM25Engine(entries)
     results = search_hybrid(bm, entries, q, limit=limit)
-    # group by file
+    # ponytail: superseded files keep showing (content is still true) but at half score,
+    # so the live entry that absorbed them wins the tie.
+    results = sorted(((i, s * 0.5 if entries[i]['superseded'] else s) for i, s in results),
+                     key=lambda x: -x[1])
+    # group by file; a superseded file whose absorber is also in the results is hidden
+    # outright (its text now lives in the absorber), otherwise it stays at half score.
+    absorbed = {sid for i, _ in results for sid in entries[i]['supersedes']}
     seen = {}
     top = []
     for i, s in results:
         e = entries[i]
         fid = e['file'][:4]
-        if fid in seen:
+        if fid in seen or (e['superseded'] and fid in absorbed):
             continue
         seen[fid] = True
         top.append((e, s))
@@ -387,13 +396,15 @@ def main():
     if json_out:
         hits = [{'key': e['key'], 'file': e['file'], 'section': e['section'],
                  'heading': e['heading'], 'score': round(s, 3),
-                 'trust_state': e['trust_state'], 'last_verified': e['last_verified'],
+                 'trust_state': 'superseded' if e['superseded'] else e['trust_state'],
+                 'last_verified': e['last_verified'],
                  'outcome': e['outcome']} for e, s in top]
         print(json.dumps({'query': q, 'hits': hits}, ensure_ascii=False))
     else:
         for e, s in top:
             mark = " [ext]" if e['type'] == 'external' else ""
-            print(f"  {e['key']:<8} {_badge(e['trust_state'])} {e['section']:<5} ({s:4.2f}){mark}  {e['heading']}")
+            badge = _badge('superseded' if e['superseded'] else e['trust_state'])
+            print(f"  {e['key']:<8} {badge} {e['section']:<5} ({s:4.2f}){mark}  {e['heading']}")
         print(f"\nmatched {len(results)} sections; showing top {len(top)}")
 
 
