@@ -128,6 +128,86 @@ def next_id(_locked=True):
     return _scan_next_id()
 
 
+def _rewrite_id(path, old_id, new_id):
+    """把單一條目檔的 id 改掉：frontmatter `id:`、body H1 的 `# NNNN `。回傳新路徑。"""
+    txt = open(path, encoding='utf-8').read()
+    txt = re.sub(r'(?m)^id:\s*"?%s"?\s*$' % re.escape(old_id), f'id: "{new_id}"', txt, count=1)
+    txt = re.sub(r'(?m)^# %s ' % re.escape(old_id), f'# {new_id} ', txt, count=1)
+    base = os.path.basename(path)
+    new_path = os.path.join(os.path.dirname(path), new_id + base[len(old_id):])
+    with open(new_path, 'w') as f:
+        f.write(txt)
+    if new_path != path:
+        os.remove(path)
+    return new_path
+
+
+def _repoint_refs(old_id, new_id, files):
+    """本次寫入一起改到的其他檔，其 related/supersedes 指向舊 id → 改指新 id。
+
+    只掃 `files`（這次寫入碰到的），不掃全庫：庫裡既有的 `"NNNN"` 引用指的是先
+    佔到那個號的他機條目，跟著改會把舊連結接到錯的地方。只換引號包住的整個 id，
+    不做裸字串取代（正文裡的 9473 可能是埠號、行號、別的 repo 的 issue）。
+    """
+    touched = []
+    for f in files:
+        if not os.path.exists(f) or not f.endswith('.md'):
+            continue
+        txt = open(f, encoding='utf-8').read()
+        if not (txt.startswith('---\n') and txt.count('---\n') >= 2):
+            continue
+        head = txt.split('---\n')[1]
+        if f'"{old_id}"' not in head:
+            continue
+        with open(f, 'w') as fh:
+            fh.write(txt.replace(head, head.replace(f'"{old_id}"', f'"{new_id}"'), 1))
+        touched.append(f)
+    return touched
+
+
+def resolve_id_collision(paths, renames=None):
+    """多裝置撞號的收尾：本機新建的條目若跟他機同號，改成新號。回傳新的 paths。
+
+    配號鎖（flock on .id.lock）只鎖得住本機，兩台各自 pull-first 之後會在同一個
+    max 上配號；先 push 的那台贏，後到的 rebase 完就得到兩個 `NNNN-*.md`。git 不
+    會報衝突——檔名不同，兩份都留下——所以撞號一定要自己掃。
+
+    只動 paths 裡的檔（那是本機這次寫的），他機那份不碰：先 push 的先得號。
+    renames（選填 dict）收 {舊路徑: 新路徑}，呼叫端用來更正回報的 created。
+    回傳的 paths 保留改名前的舊路徑：git add 要收到它才會 stage 那筆刪除，
+    否則 commit 只加了新檔，遠端會同時留著新舊兩份。
+    """
+    out, renamed = [], []
+    for p in paths:
+        base = os.path.basename(p)
+        m = re.match(r'^(\d{4})-', base)
+        if not m or not os.path.exists(p):
+            out.append(p)
+            continue
+        old_id = m.group(1)
+        me = os.path.realpath(p)
+        siblings = [f for f in _glob.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md'))
+                    if os.path.realpath(f) != me]
+        if not siblings:
+            out.append(p)
+            continue
+        with id_lock():
+            new_id = _scan_next_id()
+            new_path = _rewrite_id(p, old_id, new_id)
+        out.extend([new_path, p])   # p 已不存在 → git add 收它 = stage 這筆刪除
+        renamed.append((p, new_path))
+        if renames is not None:
+            renames[p] = new_path
+        others = [q for q in paths if os.path.abspath(q) != os.path.abspath(p)]
+        out.extend(_repoint_refs(old_id, new_id, others))
+        print(f'fixindex: 撞號 — {base} 與他機同號（{os.path.basename(siblings[0])}）'
+              f'，本機這份改為 {new_id}', file=sys.stderr)
+    if renamed:
+        _run_index('re-index')
+    # 去重保序；改號後 paths 可能含重複（refs 與條目本身）
+    return list(dict.fromkeys(out))
+
+
 # LINKER：BM25 找候選 → token 覆蓋率確認。「被判定為已知」→ append 當證據，不開新檔。
 LINK_COVERAGE = float(os.environ.get('FIXINDEX_LINK_COVERAGE', '0.8'))
 # 明確領先要求：最佳候選覆蓋率須比第二名高 L​​INK_MARGIN，否則回 None。
@@ -674,20 +754,64 @@ def _git_commit_push(paths):
     committed=<short hash>|None, pushed=bool, git_error=<str>|None。
     git_error 只在 kind ∈ (conflict, fatal) 填（離線不 die：另給 pending_push=True，
     caller 的 git_error 檢查因此不 exit 1）。所有 git 由 fxsync 統一執行。"""
-    res = fxsync.push(FIXINDEX_DIR, paths=paths)
+    renames = {}
+    res = fxsync.push(FIXINDEX_DIR, paths=paths,
+                      after_rebase=lambda ps: resolve_id_collision(ps, renames))
     out = {'committed': res.get('committed'), 'pushed': bool(res.get('pushed')),
            'git_error': None}
     if res.get('kind') in ('conflict', 'fatal'):
         out['git_error'] = res.get('detail') or res.get('reason') or 'sync_push 失敗'
     if res.get('kind') == 'offline':
         out['pending_push'] = True
+    if renames:
+        # 撞號改號了 → 回報真實路徑。payload.update(out) 會蓋掉原本的 created，
+        # 不然 JSON 指向一個已經不存在的檔名。
+        out['renamed'] = renames
+        for old_p, new_p in renames.items():
+            if old_p in (paths or []):
+                out['created'] = new_p
     return out
+
+
+def fix_unpushed_collisions():
+    """pull-first 之後補掃：本機未推的新條目若跟他機同號 → 改號並推掉。
+
+    離線裝置這條路徑不會被 push-reject 抓到：離線寫入留下未推 commit，之後
+    pull --rebase 把它 replay 上去，兩個 NNNN-*.md 並存（git 不報衝突，檔名不同），
+    下一次寫入配的是 max+1 所以自己不撞，卻順手把撞號的舊 commit 一起推上去。
+    所以撞號要在 pull 之後、看得到遠端狀態時就掃掉。
+    """
+    root = fxsync.repo_root(FIXINDEX_DIR)
+    if not root or not fxsync.has_upstream(root):
+        return
+    rc, out, _ = fxsync._run(['git', '-C', root, 'log', '--diff-filter=A',
+                              '--name-only', '--pretty=format:', '@{u}..HEAD'])
+    if rc != 0:
+        return
+    fixdir = os.path.realpath(FIXINDEX_DIR)
+    cand = []
+    for line in (out or '').splitlines():
+        line = line.strip()
+        if not line.endswith('.md'):
+            continue
+        full = os.path.join(root, line)
+        # 兩邊都 realpath：repo_root 已解 symlink，FIXINDEX_DIR 不一定（macOS 的
+        # /tmp → /private/tmp），直接 abspath 比會永遠不相等 → 整個掃描變死碼。
+        if os.path.dirname(os.path.realpath(full)) == fixdir and os.path.exists(full):
+            cand.append(full)
+    if not cand:
+        return
+    renames = {}
+    newpaths = resolve_id_collision(cand, renames)
+    if renames:
+        fxsync.push(FIXINDEX_DIR, paths=newpaths,
+                    message='fixindex: renumber ids colliding with another device')
 
 
 def _pull_first_if_repo():
     """寫入前 pull-first（fxsync.pull）。sandbox（非 git）→ no-op；離線 → 續跑
     （push 端會留 pending marker）。失敗→回傳錯誤字串（呼叫端中止）。"""
-    res = fxsync.pull(FIXINDEX_DIR)
+    res = fxsync.pull(FIXINDEX_DIR, after_rebase=fix_unpushed_collisions)
     if not res.get('ok'):
         return res.get('reason') or res.get('stderr') or 'pull-first 失敗'
     return None
