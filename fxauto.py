@@ -11,7 +11,7 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 """
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
-import fcntl, time
+import fcntl, time, unicodedata
 from contextlib import contextmanager
 import fxmeta
 import fxsync
@@ -274,6 +274,29 @@ def find_domain_file_auto(title, symps, etype='defect'):
     if len(g2) == 1:
         return next(iter(g2))
     return None
+
+
+def _slug_source(root, title, ntok=5):
+    """Slug 取材優先 ROOT 而非 title。
+
+    title 從首個 symptom 推導，symptom 按定義描述的是現象（錯誤訊息、觀察到的
+    表面），於是 slugify 後常變成 `cloudflare-waf-403`、`fixindex-doctor-120-timeout-kill`
+    這種「命名錯誤訊息而不命名缺陷」的檔名——只有記得當時錯誤訊息的人搜得到。
+    缺陷本身寫在 ROOT，所以 slug 從 ROOT 取前 ntok 個 ascii token。
+
+    ROOT 不可用時（未填、'untraced'、全中文被 NFKD 剝光、或 token 少於 2 個不成
+    語意）退回 title，維持原行為。開頭的純數字 token 一律丟掉：那多半是引用的
+    條目編號或版號，接在檔名的 NNNN- 前綴後面會變成 `9470-9212-...` 這種雙編號。
+    """
+    root = str(root or '').strip()
+    if root and root.lower() != 'untraced':
+        flat = unicodedata.normalize('NFKD', root.lower())
+        toks = [t for t in re.sub(r'[^a-z0-9]+', ' ', flat).split() if t]
+        while toks and toks[0].isdigit():
+            toks.pop(0)
+        if len(toks) >= 2:
+            return '-'.join(toks[:ntok])
+    return title
 
 
 def _derive_title(text, limit=60):
@@ -940,7 +963,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         old_id = dup[0]
         with id_lock():
             new_id = next_id(_locked=False)
-            slug = slugify(title)
+            slug = slugify(_slug_source(root, title))
             entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
             old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
@@ -1000,7 +1023,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         _intake_gate(fields.get('rule', ''))
         with id_lock():
             fid = next_id(_locked=False)
-            slug = slugify(title)
+            slug = slugify(_slug_source(root, title))
             entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
                                 evidence, rule=fields.get('rule', ''))
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
