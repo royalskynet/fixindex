@@ -24,12 +24,19 @@ CLI:
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
 import re
 import subprocess
 import sys
+import time
+
+try:
+    import fcntl
+except ImportError:  # Windows: no flock. The race stays; the code still runs.
+    fcntl = None
 
 OFFLINE_PATTERNS = [
     re.compile(r'Could not resolve host'),
@@ -226,6 +233,46 @@ def _git_dir_readonly(root):
     return False
 
 
+@contextlib.contextmanager
+def _repo_lock(root, timeout=20):
+    """Serialise the git sync section per repo. Yields True if the lock is held.
+
+    Parallel read-only queries each ran `git pull --rebase` on the same repo;
+    the overlap left DUPLICATED for-merge lines in `.git/FETCH_HEAD`, and git
+    then reports "Cannot rebase onto multiple branches" on a repo whose
+    branch.*.merge and upstream are single and correct (fix 9221, 9439). The
+    shared state is the repo, so the lock is per repo.
+
+    ponytail: one flock'd file, no lock manager. A timeout or a missing fcntl
+    falls through UNLOCKED rather than failing the caller — a read-only query
+    that races is the old behaviour, a read-only query that dies is worse.
+    """
+    path = os.path.join(root, '.git', 'fixindex-sync.lock')
+    try:
+        fh = open(path, 'w')
+    except OSError:
+        yield False          # read-only .git (sandbox); callers tolerate it
+        return
+    got = False
+    if fcntl is not None:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                got = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.1)
+    try:
+        yield got
+    finally:
+        if got:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        fh.close()
+
+
 def pull(fixdir, soft=False):
     """寫入前 pull-first（含離線積壓補推）。回傳 {ok, skipped, reason, stderr}。
 
@@ -246,7 +293,14 @@ def pull(fixdir, soft=False):
         return {'ok': True, 'skipped': True, 'reason': 'readonly-sandbox', 'stderr': ''}
     if not soft:
         flush_pending(fixdir)
-    rc, out, err = _run(['git', '-C', root, 'pull', '--rebase', '--autostash'])
+    with _repo_lock(root):
+        rc, out, err = _run(['git', '-C', root, 'pull', '--rebase', '--autostash'])
+        # A FETCH_HEAD already corrupted by an earlier unserialised race stays
+        # corrupted until something overwrites it. One clean fetch does that.
+        if rc != 0 and 'Cannot rebase onto multiple branches' in (err or ''):
+            _run(['git', '-C', root, 'fetch', 'origin'])
+            rc, out, err = _run(
+                ['git', '-C', root, 'pull', '--rebase', '--autostash'])
     if rc != 0:
         detail = (err or out or 'unknown').strip()[:300]
         kind = _classify(err or out)
