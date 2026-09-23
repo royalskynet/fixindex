@@ -720,6 +720,7 @@ fixindex fi — 一行 pipe 記 defect/經驗（自動 dedup→domain append→�
   printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …' | fixindex fi
   或 echo '一句話描述症狀' | fixindex fi
   混合輸入: SYMPTOM+INSIGHT 同 pipe → 自動拆成 defect+insight 兩筆、單一 commit
+  SLUG: <缺陷短語>  自己命名檔名（ROOT 是中文敘述時機械取材會歪，stderr 會提醒補）
 舊介面（指定 domain 直接 append）: fixindex fi <domain> [--title T] [--push] [--new]
 誤配/誤寫還原: git checkout -- fixes/NNNN-*.md  （append 前有 .fi-undo- 快照）
 EOF

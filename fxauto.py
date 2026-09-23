@@ -277,16 +277,23 @@ def find_domain_file_auto(title, symps, etype='defect'):
 
 
 def _slug_source(root, title, ntok=5):
-    """Slug 取材優先 ROOT 而非 title。
+    """Slug 取材優先 ROOT 而非 title。回傳 (來源字串, kind)。
 
     title 從首個 symptom 推導，symptom 按定義描述的是現象（錯誤訊息、觀察到的
     表面），於是 slugify 後常變成 `cloudflare-waf-403`、`fixindex-doctor-120-timeout-kill`
     這種「命名錯誤訊息而不命名缺陷」的檔名——只有記得當時錯誤訊息的人搜得到。
     缺陷本身寫在 ROOT，所以 slug 從 ROOT 取前 ntok 個 ascii token。
 
-    ROOT 不可用時（未填、'untraced'、全中文被 NFKD 剝光、或 token 少於 2 個不成
-    語意）退回 title，維持原行為。開頭的純數字 token 一律丟掉：那多半是引用的
-    條目編號或版號，接在檔名的 NNNN- 前綴後面會變成 `9470-9212-...` 這種雙編號。
+    kind='root' 取材成功；'title' 沒有 ROOT 可用（未填、'untraced'、全中文被 NFKD
+    剝光、token 少於 2 個）；'title-weak' 是 ROOT 有內容但抽不出語意——中文敘述
+    夾雜模組名時，抽出來的 ascii token 是零散識別字（9474 產出的
+    `shim-yaml-yaml-xml-parsers` 就是），拼起來不成短語。判準：挑中的 token 字元
+    總數 < ROOT 的 CJK 字元數，代表敘述主體是中文而 ascii 只是零星專有名詞。
+    這種情況沒有機械解——呼叫端（LLM）該自己給 `SLUG:`，所以標記出來讓它知道。
+
+    開頭的純數字 token 一律丟掉：那多半是引用的條目編號或版號，接在檔名的 NNNN-
+    前綴後面會變成 `9470-9212-...` 這種雙編號。重複 token 去掉（保序），否則
+    ROOT 裡反覆出現的模組名會拼成 `yaml-yaml-xml`。
     """
     root = str(root or '').strip()
     if root and root.lower() != 'untraced':
@@ -294,9 +301,30 @@ def _slug_source(root, title, ntok=5):
         toks = [t for t in re.sub(r'[^a-z0-9]+', ' ', flat).split() if t]
         while toks and toks[0].isdigit():
             toks.pop(0)
+        toks = list(dict.fromkeys(toks))
         if len(toks) >= 2:
-            return '-'.join(toks[:ntok])
-    return title
+            picked = toks[:ntok]
+            cjk = len(re.findall(r'[\u3400-\u9fff\u3040-\u30ff]', root))
+            if cjk and sum(len(t) for t in picked) < cjk:
+                return title, 'title-weak'
+            return '-'.join(picked), 'root'
+    return title, 'title'
+
+
+def _slug_pick(explicit, root, title, fallback='fix'):
+    """決定 slug。`SLUG:` 明示 > ROOT 取材 > title。回傳 (slug, kind)。
+
+    kind='title-weak' 時往 stderr 喊一聲：那代表機械取材抽不出語意，檔名會爛，
+    呼叫端重跑時該自己帶 `SLUG:`。只提示不阻斷（寫入永遠比檔名重要）。
+    """
+    explicit = str(explicit or '').strip()
+    if explicit:
+        return slugify(explicit, fallback=fallback), 'explicit'
+    src, kind = _slug_source(root, title)
+    if kind == 'title-weak':
+        print('fixindex: ROOT 是中文敘述，slug 只抽到零散識別字 → 退回 title。'
+              '重跑時帶 SLUG: <缺陷短語> 自己命名。', file=sys.stderr)
+    return slugify(src, fallback=fallback), kind
 
 
 def _derive_title(text, limit=60):
@@ -858,7 +886,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
         old_id = dup[0]
         with id_lock():
             new_id = next_id(_locked=False)
-            slug = slugify(title, fallback='insight')
+            slug, _ = _slug_pick(ini.get('slug'), '', title, fallback='insight')
             entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
                                         slug, queries, tags, detail)
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
@@ -908,7 +936,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
     _intake_gate(ini.get('rule', ''))
     with id_lock():
         fid = next_id(_locked=False)
-        slug = slugify(title, fallback='insight')
+        slug, _ = _slug_pick(ini.get('slug'), '', title, fallback='insight')
         entry = build_entry_insight(fid, title, context, insight, impl, revisit,
                                     slug, queries, tags, detail, rule=ini.get('rule', ''))
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
@@ -963,7 +991,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         old_id = dup[0]
         with id_lock():
             new_id = next_id(_locked=False)
-            slug = slugify(_slug_source(root, title))
+            slug, _slug_kind = _slug_pick(fields.get('slug'), root, title)
             entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
             old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
@@ -1023,7 +1051,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         _intake_gate(fields.get('rule', ''))
         with id_lock():
             fid = next_id(_locked=False)
-            slug = slugify(_slug_source(root, title))
+            slug, _slug_kind = _slug_pick(fields.get('slug'), root, title)
             entry = build_entry(fid, title, symps, root, fix, verify, slug, tags, detail,
                                 evidence, rule=fields.get('rule', ''))
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
@@ -1097,6 +1125,10 @@ def main():
                 fields.setdefault(k, v)
             elif k in ('context', 'insight', 'implication', 'revisit-when', 'queries', 'type'):
                 insight_fields[k] = v
+            elif k == 'slug':
+                # SLUG: 呼叫端自己命名 — defect 與 insight 共用
+                fields['slug'] = v
+                insight_fields['slug'] = v
             elif k == 'rule':
                 # RULE: 泛化規則 — defect 與 insight 共用
                 fields['rule'] = v
