@@ -8,10 +8,13 @@ set -euo pipefail
 
 # brew python@3.14/@3.12 的 pyexpat 連到 macOS 26 的舊版 /usr/lib/libexpat.1.dylib，
 # 符號對不上 → import xml 掛掉 → pip 無法啟動 → 這顆 python 永遠裝不了 pyyaml。
-# 改挑一顆真的 import 得動 yaml 的直譯器；brew 修好後這個條件自動失效，shim 不再被用到。
-if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+# 兩個模組都要驗：只驗 yaml 的話，一旦 pyyaml 裝進 brew python 的 --user site-packages，
+# 條件就永遠為假，shim 再也不接管——而 brew 升級 python 會讓 pyexpat 重新壞掉（見
+# ref_pyexpat_brew_python_macos26），那時就直接炸在 import xml 而沒有 fallback。
+# 挑一顆 yaml 與 xml 都 import 得動的直譯器；brew 修好後這個條件自動失效，shim 不再被用到。
+if ! python3 -c 'import yaml, xml.parsers.expat' >/dev/null 2>&1; then
   for _py in /usr/bin/python3 /usr/local/bin/python3; do
-    if [[ -x "$_py" ]] && "$_py" -c 'import yaml' >/dev/null 2>&1; then
+    if [[ -x "$_py" ]] && "$_py" -c 'import yaml, xml.parsers.expat' >/dev/null 2>&1; then
       _pyshim="$HOME/.local/libexec/fixindex"
       mkdir -p "$_pyshim" && ln -sf "$_py" "$_pyshim/python3"
       export PATH="$_pyshim:$PATH"
