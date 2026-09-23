@@ -951,17 +951,16 @@ _has_vestigial_tag() {
   if printf '%s\n' "$fm" | grep -qE '^[[:space:]]*-[[:space:]]*(auto|shadow)[[:space:]]*$'; then
     return 0
   fi
-  # flow form: tags: [a, auto, b] — python 精確拆元素比對（子字串會誤報 auto-goal 等）
-  if printf '%s\n' "$fm" | python3 -c '
-import sys, re
-fm = sys.stdin.read()
-m = re.search(r"^tags:[ \t]*\[(.*?)\]", fm, re.M)
-if not m:
-    sys.exit(1)
-items = [x.strip().strip(chr(34) + chr(39)) for x in m.group(1).split(",") if x.strip()]
-sys.exit(0 if ("auto" in items or "shadow" in items) else 1)
-'; then
-    return 0
+  # flow form: tags: [a, auto, b] — 純 bash，不逐檔 spawn python（1199 檔 = ~120s）。
+  # strip 引號/spaces 後整元素精確比對（子字串會誤報 auto-goal 等），`,auto,` 兩側逗號是錨。
+  local tagsline
+  tagsline=$(printf '%s\n' "$fm" | sed -n 's/^tags:[[:space:]]*//p' | head -1)
+  if [[ "$tagsline" == \[*\] ]]; then
+    local inner="${tagsline#[}"; inner="${inner%]}"
+    inner=${inner//\"/}; inner=${inner//\'/}; inner=${inner//[[:space:]]}
+    case ",$inner," in
+      *,auto,*|*,shadow,*) return 0 ;;
+    esac
   fi
   return 1
 }
