@@ -273,12 +273,15 @@ def _repo_lock(root, timeout=20):
         fh.close()
 
 
-def pull(fixdir, soft=False):
+def pull(fixdir, soft=False, after_rebase=None):
     """寫入前 pull-first（含離線積壓補推）。回傳 {ok, skipped, reason, stderr}。
 
     skipped=True = 不需 sync（no-sync / 巢狀 / 非 git / 無 upstream / 唯讀沙箱），
     非錯誤。ok=False = 硬失敗（conflict/fatal），呼叫端應 die。offline 對硬 pull
-    也不 die（離線可寫入本地，由後續 push 累積 pending marker）。"""
+    也不 die（離線可寫入本地，由後續 push 累積 pending marker）。
+
+    after_rebase: rebase 成功後、補推積壓之前呼叫（撞號修正掛在這裡——必須先看到
+    他機的條目才驗得出撞號，又必須在 flush_pending 把本機積壓推出去之前修掉）。"""
     if _sync_disabled() or _nested_skip():
         return {'ok': True, 'skipped': True, 'reason': 'no-sync-or-nested', 'stderr': ''}
     root = repo_root(fixdir)
@@ -291,8 +294,6 @@ def pull(fixdir, soft=False):
             print(f"fixindex: debug — {root}/.git 唯讀（沙箱），略過 pull",
                   file=sys.stderr)
         return {'ok': True, 'skipped': True, 'reason': 'readonly-sandbox', 'stderr': ''}
-    if not soft:
-        flush_pending(fixdir)
     with _repo_lock(root):
         rc, out, err = _run(['git', '-C', root, 'pull', '--rebase', '--autostash'])
         # A FETCH_HEAD already corrupted by an earlier unserialised race stays
@@ -313,14 +314,54 @@ def pull(fixdir, soft=False):
                   file=sys.stderr)
             return {'ok': True, 'skipped': False, 'reason': 'offline', 'stderr': detail}
         return {'ok': False, 'skipped': False, 'reason': detail, 'stderr': detail}
+    # 順序要緊：rebase 之後才看得到他機條目（撞號驗得出來），而修正必須在
+    # flush_pending 之前——否則積壓的撞號 commit 會先被推上遠端。
+    if after_rebase:
+        after_rebase()
+    if not soft:
+        flush_pending(fixdir)
     return {'ok': True, 'skipped': False, 'reason': '', 'stderr': ''}
 
 
-def push(fixdir, paths=None, message=None):
+def _rebase_and_retry(root, fixdir, paths, message, after_rebase, detail):
+    """push 被 reject（他機在我 pull 之後 push 了）→ rebase 到最新、修撞號、再推一次。
+
+    只重試一次：第二次還被 reject 代表遠端變動得比我們寫得還快，那要人來看。
+    rebase 失敗（真衝突，通常是 FIX-INDEX.md）→ 原樣回報 conflict，不自作主張解。
+    """
+    with _repo_lock(root):
+        rc, out, err = _run(['git', '-C', root, 'pull', '--rebase', '--autostash'])
+    if rc != 0:
+        return {'committed': None, 'pushed': False, 'kind': 'conflict',
+                'detail': f'push 被 reject，rebase 也失敗: {(err or out).strip()[:200]}',
+                'pending_push': None}
+    print('fixindex: push 被 reject（他機先寫），已 rebase 到最新，重推一次',
+          file=sys.stderr)
+    if after_rebase:
+        new_paths = after_rebase(paths)
+        if new_paths:
+            paths = new_paths
+    res = push(fixdir, paths=paths, message=message, _retry=False)
+    if res.get('kind') == 'noop':
+        # rebase 後沒有新差異（改號沒發生、內容已在 HEAD 裡）→ 單純把既有 commit 推上去
+        rc, out, err = _run(['git', '-C', root, 'push'])
+        if rc == 0:
+            return {'committed': None, 'pushed': True, 'kind': 'ok',
+                    'detail': 'rebased', 'pending_push': None}
+        return {'committed': None, 'pushed': False, 'kind': _classify(err or out),
+                'detail': (err or out).strip()[:300], 'pending_push': None}
+    return res
+
+
+def push(fixdir, paths=None, message=None, after_rebase=None, _retry=True):
     """paths-scoped 結尾 push（消 0171§2 並發搶檔；空/無效 paths → 不 fallback add -A，Fail Loud）。
 
     回傳 {committed, pushed, kind, detail, pending_push}。
-    kind ∈ skip/noop/ok/offline/conflict/fatal。"""
+    kind ∈ skip/noop/ok/offline/conflict/fatal。
+
+    after_rebase: 被 reject（他機先 push）時，rebase 到最新之後呼叫，收 paths 回
+    新 paths——多裝置共用同一 repo 時用來修撞號（見 fxauto.resolve_id_collision）。
+    注入而非 import：fxsync 是 fxauto 的下游，反向 import 會成環。"""
     if _sync_disabled() or _nested_skip():
         return {'committed': None, 'pushed': False, 'kind': 'skip',
                 'detail': 'no-sync-or-nested', 'pending_push': None}
@@ -341,7 +382,15 @@ def push(fixdir, paths=None, message=None):
     for p in paths:
         rp = _real(p)
         if not os.path.exists(rp):
-            missing.append(p)
+            # 已刪但仍被 git 追蹤（撞號改號留下的舊路徑）→ 還是要 add，
+            # 否則只 stage 了新檔，commit 不含那筆刪除，遠端新舊兩份並存。
+            relp = os.path.relpath(rp, rroot)
+            rc_t, _, _ = _run(['git', '-C', root, 'ls-files', '--error-unmatch',
+                               '--', relp])
+            if rc_t == 0:
+                rel.append(relp)
+            else:
+                missing.append(p)
             continue
         if not (rp == rroot or rp.startswith(rroot + os.sep)):
             print(f"fixindex: WARNING — path 不在 repo 內，跳過: {p}", file=sys.stderr)
@@ -398,6 +447,8 @@ def push(fixdir, paths=None, message=None):
                   f"（網路恢復後下次寫入自動補推）: {detail}", file=sys.stderr)
             return {'committed': short, 'pushed': False, 'kind': 'offline',
                     'detail': detail, 'pending_push': True}
+        if kind == 'conflict' and _retry:
+            return _rebase_and_retry(root, fixdir, paths, message, after_rebase, detail)
         return {'committed': short, 'pushed': False, 'kind': kind,
                 'detail': detail, 'pending_push': None}
     return {'committed': short, 'pushed': True, 'kind': 'ok',
@@ -464,6 +515,20 @@ def _env_fixdir():
     return os.environ.get('FIXINDEX_DIR') or os.path.join(os.getcwd(), 'fixes')
 
 
+def _sweep_collisions():
+    """CLI pull 的 after_rebase：修多裝置撞號。
+
+    bash wrapper 對每個寫入命令先跑 `fxsync.py pull`，所以掃描必須也掛在這裡——
+    只掛在 fxauto 的 pull 上等於沒掛，那一次早就是 no-op 了。
+    fxauto 延遲 import：module 層 import 會跟 fxauto → fxsync 成環。
+    """
+    try:
+        import fxauto
+        fxauto.fix_unpushed_collisions()
+    except Exception as e:           # 掃描是加分項，不該擋掉 pull
+        print(f'fixindex: warning — 撞號掃描失敗，續跑: {e}', file=sys.stderr)
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -473,7 +538,9 @@ def main():
     rest = args[1:]
     fixdir = _env_fixdir()
     if cmd == 'pull':
-        res = pull(fixdir, soft='--soft' in rest)
+        soft = '--soft' in rest
+        res = pull(fixdir, soft=soft,
+                   after_rebase=None if soft else _sweep_collisions)
         if not res.get('ok'):
             print(f"fixindex: fxsync pull 失敗（非離線）: {res.get('reason')}", file=sys.stderr)
             return 1
