@@ -268,10 +268,50 @@ def find_related(query, etype='defect'):
         return None
 
 
-def slugify(text, fallback='untitled'):
+_SLUG_STOP = {
+    'the', 'and', 'for', 'with', 'not', 'but', 'use', 'using', 'this', 'that',
+    'from', 'into', 'are', 'was', 'has', 'had', 'its', 'all', 'any', 'one',
+    'two', 'out', 'new', 'old', 'via', 'per', 'than', 'then', 'when', 'only',
+    'also', 'have', 'been', 'will', 'can', 'does', 'did', 'get', 'got', 'set',
+    'see', 'let', 'you', 'its',
+}
+
+
+def _slug_extra(*parts):
+    """把 fi 欄位（可能是 str 或 list）攤平成一段文字餵給 _mine_ascii。"""
+    buf = []
+    for p in parts:
+        if isinstance(p, (list, tuple)):
+            buf.extend(str(x) for x in p)
+        elif p:
+            buf.append(str(p))
+    return ' '.join(buf)
+
+
+def _mine_ascii(text, want=4):
+    """從內文挖 ASCII 技術詞湊 slug（全中文標題塌成空字串時的第一順位回退）。"""
+    seen, picked = set(), []
+    for w in re.findall(r'[A-Za-z][A-Za-z0-9_.-]{2,}', text or ''):
+        w = w.strip('.-_').lower()
+        if len(w) < 3 or w in _SLUG_STOP or w in seen:
+            continue
+        seen.add(w)
+        picked.append(w)
+        if len(picked) >= want:
+            break
+    return re.sub(r'[^a-z0-9]+', '-', '-'.join(picked)).strip('-')[:60]
+
+
+def slugify(text, fallback='untitled', extra=''):
     import unicodedata
     s = unicodedata.normalize('NFKD', text.lower())
     out = re.sub(r'[^a-z0-9]+', '-', s).strip('-')[:60]
+    if not out and extra:
+        # 標題全中文 → 先從內文（SYMPTOM/ROOT/FIX 或 CONTEXT/INSIGHT…）挖技術詞，
+        # 比 fallback='insight' 這種通用字有語意，也不會撞成同名。
+        out = _mine_ascii(extra)
+        if out:
+            print(f'fixindex: 標題無 ASCII，slug 取自內文技術詞: {out!r}', file=sys.stderr)
     if not out:
         # 全中文/全符號 title 會塌成空字串 → 檔名變 NNNN-.md，索引與檔名都認不出內容。
         # bash 端 slugify() 對此直接 die；python 端走 fi 管線不能中斷寫入（內容已備妥），
@@ -404,7 +444,7 @@ def _slug_pick(explicit, root, title, fallback='fix'):
     if kind == 'title-weak':
         print('fixindex: ROOT 是中文敘述，slug 只抽到零散識別字 → 退回 title。'
               '重跑時帶 SLUG: <缺陷短語> 自己命名。', file=sys.stderr)
-    return slugify(src, fallback=fallback), kind
+    return slugify(src, fallback=fallback, extra=root), kind
 
 
 def _derive_title(text, limit=60):
@@ -1010,7 +1050,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
         old_id = dup[0]
         with id_lock():
             new_id = next_id(_locked=False)
-            slug, _ = _slug_pick(ini.get('slug'), '', title, fallback='insight')
+            slug, _ = _slug_pick(ini.get('slug'), _slug_extra(insight, context, impl), title, fallback='insight')
             entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
                                         slug, queries, tags, detail)
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
@@ -1060,7 +1100,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
     _intake_gate(ini.get('rule', ''))
     with id_lock():
         fid = next_id(_locked=False)
-        slug, _ = _slug_pick(ini.get('slug'), '', title, fallback='insight')
+        slug, _ = _slug_pick(ini.get('slug'), _slug_extra(insight, context, impl), title, fallback='insight')
         entry = build_entry_insight(fid, title, context, insight, impl, revisit,
                                     slug, queries, tags, detail, rule=ini.get('rule', ''))
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
