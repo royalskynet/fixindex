@@ -7,7 +7,7 @@
 # 配號鎖是本機 flock，鎖不住第二台機器，所以兩台會在同一個 max 上配號。撞號在
 # git 眼裡不是衝突（檔名不同，兩份都留），驗收條件因此是「遠端沒有重複的 4 碼前綴」。
 set -e
-SB=$(mktemp -d); F=/Users/m2/fixindex/fixindex
+SB=$(mktemp -d "${TMPDIR:-/tmp}/t2d.XXXXXX"); F="$(cd "$(dirname "$0")" && pwd)/fixindex"
 cd $SB; git init -q --bare o.git; git clone -q o.git A 2>/dev/null; git clone -q o.git B 2>/dev/null
 cd A && mkdir fixes && printf -- '---\nid: "0001"\nslug: seed\ntitle: seed\nsymptoms: []\nstatus: active\nsupersedes: []\nrelated: []\n---\n\n# 0001 seed\n' > fixes/0001-seed.md
 git -c user.email=t@t -c user.name=t add -A; git -c user.email=t@t -c user.name=t commit -qm seed; git push -q origin HEAD:refs/heads/main
