@@ -38,6 +38,23 @@ OVERLAP_THRESHOLD = 0.6
 # superseded by an unrelated entry sharing only the word 沙箱 (ratio 2/3).
 MIN_OLD_TITLE_TOKENS = 6   # too short to judge -- never auto-supersede it
 MIN_ABS_OVERLAP = 3        # >= ~2 real words, not one word counted twice as bigrams
+# 2026-09-26: the tgt ⊆ ts path also needs a floor on the NEW title. A title cut
+# at the first full-width paren (「OpenClaw 2026.9.6（Windows…」→ 3 tokens) is a
+# subset of any entry naming the same product+version, so 9574 (gateway auth)
+# superseded 9572 (portable node) — same product, different defect.
+MIN_NEW_TITLE_TOKENS = 5
+
+
+def _dup_fires(ts, tgt):
+    """Pure dedup decision over old (ts) / new (tgt) title token sets."""
+    if not ts or len(ts) < MIN_OLD_TITLE_TOKENS:
+        return False
+    inter = len(tgt & ts)
+    if inter < MIN_ABS_OVERLAP:
+        return False
+    if tgt <= ts and len(tgt) >= MIN_NEW_TITLE_TOKENS:
+        return True
+    return inter / len(ts) >= OVERLAP_THRESHOLD
 
 
 def _q(s):
@@ -148,7 +165,7 @@ def _rewrite_id(path, old_id, new_id):
     txt = re.sub(r'(?m)^# %s ' % re.escape(old_id), f'# {new_id} ', txt, count=1)
     base = os.path.basename(path)
     new_path = os.path.join(os.path.dirname(path), new_id + base[len(old_id):])
-    with open(new_path, 'w') as f:
+    with open(new_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(txt)
     if new_path != path:
         os.remove(path)
@@ -172,7 +189,7 @@ def _repoint_refs(old_id, new_id, files):
         head = txt.split('---\n')[1]
         if f'"{old_id}"' not in head:
             continue
-        with open(f, 'w') as fh:
+        with open(f, 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(txt.replace(head, head.replace(f'"{old_id}"', f'"{new_id}"'), 1))
         touched.append(f)
     return touched
@@ -380,7 +397,7 @@ def find_domain_file_auto(title, symps, etype='defect'):
             continue
         _id, slug = base[:-3].split('-', 1)
         try:
-            with open(fp) as f:
+            with open(fp, encoding='utf-8') as f:
                 txt = f.read()
         except Exception:
             continue
@@ -529,7 +546,7 @@ def _merge_symptoms(path, new_symps):
     0454 教訓）。找不到 symptoms: 就 return 不回滾（body 已先 append）。
     """
     import yaml as _yaml
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         lines = f.readlines()
     # 找 frontmatter 邊界：第一個 --- 到第二個 ---，只在區間內操作
     starts = [i for i, ln in enumerate(lines) if ln.strip() == '---']
@@ -575,7 +592,7 @@ def _merge_symptoms(path, new_symps):
             merged.append(v)
     # 整段置換為 block list（一律 block，格式定於一尊）
     lines[start:end] = ['symptoms:\n'] + [f'  - {_q(s)}\n' for s in merged]
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
         f.writelines(lines)
 
 
@@ -585,7 +602,7 @@ def _append_to_file(path, title, symps, root, fix, verify, detail='', trust=None
     {'evidence': '...'} → writes **State:** verified / **Evidence:** /
     **Last verified:** (today) into the new section (legacy otherwise)."""
     import time, shutil
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         txt = f.read()
     snap = os.path.join(tempfile.gettempdir(),
                         f'fi-undo-{os.path.basename(path)}.{os.getpid()}')
@@ -612,7 +629,7 @@ def _append_to_file(path, title, symps, root, fix, verify, detail='', trust=None
     if detail:
         lines.append(detail)
         lines.append('')
-    with open(path, 'a') as f:
+    with open(path, 'a', encoding='utf-8', newline='\n') as f:
         f.write('\n' + '\n'.join(lines) + '\n')
     _merge_symptoms(path, symps)
     _verify_written(path, snap=snap)   # 2d: append 後立即驗合併後 frontmatter，壞則還原快照
@@ -637,7 +654,7 @@ def find_duplicate(title, etype='defect'):
     best = None
     for fp in files:
         try:
-            with open(fp) as f:
+            with open(fp, encoding='utf-8') as f:
                 txt = f.read()
         except Exception:
             continue
@@ -647,13 +664,8 @@ def find_duplicate(title, etype='defect'):
             continue
         t = fm.get('title') or os.path.basename(fp)
         ts = _title_tokens(str(t))
-        if not ts or len(ts) < MIN_OLD_TITLE_TOKENS:
-            continue
-        inter = len(tgt & ts)
-        if inter < MIN_ABS_OVERLAP:
-            continue
-        if tgt <= ts or (inter / len(ts) >= OVERLAP_THRESHOLD):
-            overlap = inter / len(ts)   # 新詞涵蓋舊標題比例
+        if _dup_fires(ts, tgt):
+            overlap = len(tgt & ts) / len(ts)   # 新詞涵蓋舊標題比例
             if best is None or overlap > best[1]:
                 best = (os.path.basename(fp)[:4], round(overlap, 2))
     return best
@@ -925,7 +937,7 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     """Insight 版 domain append：§N 用 Context/Insight/Implication/Revisit-when 標籤，
     並把 QUERIES 併入 frontmatter symptoms（未來查詢句可被 find 命中）。"""
     import shutil
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         txt = f.read()
     snap = os.path.join(tempfile.gettempdir(),
                         f'fi-undo-{os.path.basename(path)}.{os.getpid()}')
@@ -947,7 +959,7 @@ def _append_to_file_insight(path, title, context, insight, implication, revisit,
     if detail:
         lines.append(detail)
         lines.append('')
-    with open(path, 'a') as f:
+    with open(path, 'a', encoding='utf-8', newline='\n') as f:
         f.write('\n' + '\n'.join(lines) + '\n')
     _merge_symptoms(path, queries)
     _verify_written(path, snap=snap)   # 2d: append 後立即驗，壞則還原快照
@@ -970,7 +982,7 @@ def _emit_repeat_eval_event(hint):
             return
         rec = {'ts': datetime.datetime.now().isoformat(timespec='seconds'),
                'key': m.group(1), 'reason': m.group(2), 'recommendation': m.group(3)}
-        with open(path, 'a', encoding='utf-8') as f:
+        with open(path, 'a', encoding='utf-8', newline='\n') as f:
             f.write(json.dumps(rec, ensure_ascii=False) + '\n')
     except Exception:
         pass
@@ -1070,7 +1082,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
             import glob as _g
             old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
             path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-            with open(path, 'w') as f:
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
             _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
@@ -1118,7 +1130,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
                                     slug, queries, tags, detail, rule=ini.get('rule', ''))
         os.makedirs(FIXINDEX_DIR, exist_ok=True)
         path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(entry)
         _verify_written(path)   # 2d: 寫完即驗
     _run_index('re-index')
@@ -1175,7 +1187,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
             import glob as _g
             old_files = sorted(_g.glob(old_path))
             path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
-            with open(path, 'w') as f:
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
             _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
@@ -1233,7 +1245,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
                                 evidence, rule=fields.get('rule', ''))
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
             path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
-            with open(path, 'w') as f:
+            with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
             _verify_written(path)   # 2d: 寫完即驗
         _run_index('re-index')
