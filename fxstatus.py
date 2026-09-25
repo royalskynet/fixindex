@@ -11,6 +11,7 @@ Usage:
   ② sync    git 狀態：ahead/behind（error）、dirty tree（warning）、
             無 upstream／detached HEAD（warning）、非 git repo（error）
   ③ lint    superseded 但 supersedes 為空（error，0452 形態）
+  ④ commands Claude Code 已安裝卻缺 /fi 斜線指令（warning；跑 install.sh 補）
 
 語意：error → exit 非 0；warning → 標出但 exit 0。
 """
@@ -123,6 +124,21 @@ def lint_state(fixdir):
     return s
 
 
+def commands_state():
+    """④ /fi 是否裝進 Claude Code config dir（CLAUDE_CONFIG_DIR 優先）。
+    install.sh 早期只裝 CLI，/fi 在每台新機與隔離 config（deepclaude，9191）反覆消失。
+    沒裝 Claude Code（config dir 不存在）→ 不適用，不警告。"""
+    cdir = Path(os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"))
+    s = {"claude_dir": str(cdir), "errors": [], "warnings": []}
+    if not cdir.is_dir():
+        return s
+    repo = Path(__file__).resolve().parent
+    for cmd in sorted((repo / "commands").glob("*.md")):
+        if not (cdir / "commands" / cmd.name).exists():
+            s["warnings"].append(f"slash command {cmd.name} 未安裝於 {cdir}/commands（跑 {repo}/install.sh）")
+    return s
+
+
 def report(sections, json_out=False, assert_clean=False):
     """三段輸出。fail = errors 或 pending_push（離線積壓）存在。
     --assert-clean：fail → exit 1（供 stop hook 閘門 / CI）。"""
@@ -140,7 +156,7 @@ def report(sections, json_out=False, assert_clean=False):
         print(json.dumps(payload, ensure_ascii=False))
         return 0 if not fail else 1
 
-    names = {"index": "① index", "sync": "② sync", "lint": "③ lint"}
+    names = {"index": "① index", "sync": "② sync", "lint": "③ lint", "commands": "④ commands"}
     for name, sec in sections.items():
         label = names.get(name, name)
         detail = [f"{k}={v}" for k, v in sec.items()
@@ -178,6 +194,7 @@ def main():
     sections["index"] = index_state(fixdir, index)
     sections["sync"] = fxsync.state(fixdir)
     sections["lint"] = lint_state(fixdir)
+    sections["commands"] = commands_state()
 
     code = report(sections, json_out=json_out, assert_clean=assert_clean)
     return code
