@@ -11,7 +11,12 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 """
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
-import fcntl, time, unicodedata
+import time, unicodedata
+try:
+    import fcntl
+except ImportError:  # Windows: no flock -> msvcrt byte-range lock, same non-blocking semantics
+    fcntl = None
+    import msvcrt
 from contextlib import contextmanager
 import fxmeta
 import fxsync
@@ -98,7 +103,11 @@ def id_lock(timeout=ID_LOCK_TIMEOUT):
     try:
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 break
             except OSError:
                 if time.monotonic() >= deadline:
@@ -109,7 +118,11 @@ def id_lock(timeout=ID_LOCK_TIMEOUT):
         try:
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if fcntl:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            else:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
     finally:
         os.close(fd)
 
