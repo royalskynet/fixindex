@@ -460,51 +460,63 @@ EOF
 }
 
 cmd_re_index() {
-  # Lightweight check: warn if wrapped frontmatter detected
-  # (don't block re-index, just alert)
-  local wrapped_check=""
-  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
-    [[ -e "$f" ]] || continue
-    if _is_wrapped_frontmatter "$f"; then
-      wrapped_check+=$'  '"$(basename "$f")"$'\n'
-    fi
-  done
-  if [[ -n "$wrapped_check" ]]; then
-    {
-      echo "fixindex: WARNING — wrapped frontmatter detected in:"
-      echo "$wrapped_check"
-      echo "Run \`fixindex doctor --fix\` to repair"
-    } >&2
-  fi
-
-  local tmp tbl
+  # Single awk pass over all entries (was ~10 forks/file: prohibitive on
+  # MSYS/Git Bash where each fork costs ~25ms → minutes for 1k+ entries).
+  # Emits W<TAB>file (wrapped frontmatter), D<TAB>…(todo), R<TAB>row.
+  local tmp tbl scan
   # ponytail: bare mktemp uses darwin confstr (/var/folders/...) and ignores
   # TMPDIR, which sandboxed runs cannot write — an explicit template honours it
   tmp=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
   tbl=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
+  scan=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
+  local files=("$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md)
+  [[ -e "${files[0]}" ]] || files=()
+  if (( ${#files[@]} )); then
+    awk '
+      function flush(  base, id, slug, t) {
+        if (fname == "") return
+        base = fname; sub(/.*\//, "", base); sub(/\.md$/, "", base)
+        id = base; sub(/-.*/, "", id)
+        slug = base; sub(/^[^-]*-/, "", slug)
+        if (wrapped) print "W:  " base ".md"
+        if (status == "superseded") id = "~~" id "~~"
+        if (title == "" || title == "TODO") print "D:    " id "  " slug
+        t = (title == "" ? "TODO" : title)
+        printf "R:| %s | %s | %s | %s |\n", id, slug, t, tags
+      }
+      FNR == 1 { flush(); fname = FILENAME; title = tags = status = ""
+                 gt = gg = gs = 0; fmdone = 0; wrapped = 0 }
+      FNR >= 2 && !fmdone {
+        if (FNR >= 3 && /^---$/) fmdone = 1
+        else if (/^(metadata:|name:[[:space:]]*"")/) wrapped = 1
+      }
+      !gt && /^title:/  { gt = 1; v = $0; sub(/^title:[[:space:]]*/, "", v); gsub(/^"/, "", v); gsub(/"$/, "", v); title = v }
+      !gg && /^tags:/   { gg = 1; v = $0; sub(/^tags:[[:space:]]*/, "", v); gsub(/[\[\]]/, "", v); tags = v }
+      !gs && /^status:/ { gs = 1; v = $0; sub(/^status:[[:space:]]*/, "", v); status = v }
+      END { flush() }
+    ' "${files[@]}" > "$scan"
+  fi
+
+  local wrapped_check=""
+  wrapped_check=$(sed -n 's/^W://p' "$scan")
+  if [[ -n "$wrapped_check" ]]; then
+    {
+      echo "fixindex: WARNING — wrapped frontmatter detected in:"
+      echo "$wrapped_check"
+      echo
+      echo "Run \`fixindex doctor --fix\` to repair"
+    } >&2
+  fi
+
   local todo_list=""
+  todo_list=$(sed -n 's/^D://p' "$scan")
+  [[ -n "$todo_list" ]] && todo_list=$'\n'"$todo_list"
   {
     echo "| ID | Slug | Title | Tags |"
     echo "|----|------|-------|------|"
-    for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
-      [[ -e "$f" ]] || continue
-      local base id slug title tags status
-      base=$(basename "$f" .md)
-      id="${base%%-*}"
-      slug="${base#*-}"
-      title=$(awk '/^title:/ {sub(/^title:[[:space:]]*/,""); gsub(/^"/,""); gsub(/"$/,""); print; exit}' "$f")
-      tags=$(awk '/^tags:/ {sub(/^tags:[[:space:]]*/,""); gsub(/[\[\]]/,""); print; exit}' "$f")
-      status=$(awk '/^status:/ {sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
-      [[ "$status" == "superseded" ]] && id="~~$id~~"
-
-      # Check if title is empty or exactly "TODO"
-      if [[ -z "$title" ]] || [[ "$title" == "TODO" ]]; then
-        todo_list+=$'\n'"    $id  $slug"
-      fi
-
-      printf "| %s | %s | %s | %s |\n" "$id" "$slug" "${title:-TODO}" "${tags:-}"
-    done
+    sed -n 's/^R://p' "$scan"
   } > "$tbl"
+  rm -f "$scan"
 
   awk -v tbl="$tbl" '
     BEGIN { in_block=0 }
