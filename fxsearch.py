@@ -420,16 +420,9 @@ def main():
         if len(top) >= limit:
             break
     if json_out:
-        by_key = {e['key']: i for i, e in enumerate(entries)}
-        covs = {}
-        if len(top) <= 8:
-            qt = set(tokenize(q))
-            for e, _ in top:
-                covs[e['key']] = bm.coverage(by_key[e['key']], qt)
         hits = [{'key': e['key'], 'file': e['file'], 'section': e['section'],
                  'heading': e['heading'], 'score': round(s, 3),
                  'title': e['title'], 'rule': e['rule'],
-                 'coverage': covs.get(e['key']),
                  'trust_state': 'superseded' if e['superseded'] else e['trust_state'],
                  'last_verified': e['last_verified'],
                  'outcome': e['outcome']} for e, s in top]
