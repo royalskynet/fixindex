@@ -30,9 +30,15 @@ git clone https://github.com/royalskynet/fixindex.git ~/dev/fixindex
 cd ~/dev/fixindex
 ```
 
-### 2. 把 CLI 放上 PATH
+### 2. 安裝 CLI 與 `/fi` 斜線指令
 
-任選一種：
+```bash
+bash install.sh      # CLI → ~/.local/bin/fixindex；commands/*.md（/fi）→ ${CLAUDE_CONFIG_DIR:-~/.claude}/commands
+```
+
+> **只裝 CLI 不算裝完**：`/fi` 是 `commands/fi.md`，沒 link 進 Claude Code config dir 就不存在。隔離的 config（如 `CLAUDE_CONFIG_DIR=~/.deepclaude/config`）要另外列：`FIXINDEX_CLAUDE_DIRS=~/.deepclaude/config bash install.sh`。`fixindex status` 的 ④ commands 段會對缺 `/fi` 發 WARNING。
+
+或手動（只放 CLI，之後仍要自己 link `commands/fi.md`）：
 
 ```bash
 ln -s "$PWD/fixindex" ~/.local/bin/fixindex      # 最常見：symlink
