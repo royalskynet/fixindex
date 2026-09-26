@@ -128,6 +128,24 @@ class BM25Engine:
         scores = [(i, self.score(i, qt)) for i in range(self.n)]
         return sorted([(i, s) for i, s in scores if s > 0], key=lambda x: -x[1])[:limit * 2]
 
+    def coverage(self, i, qt):
+        """查詢覆蓋率 = Σidf(命中 query token) / Σidf(全部 query token)，值域 [0,1]、跨查詢可比。
+
+        命中判定與 score() 一致：exact `t in tf`、`len(t)>=3` 的 prefix-fuzzy、
+        以及 SYNONYMS 展開，任一成立即算命中。僅對最終 top hits 算，不進 score() 主迴圈。"""
+        tf = self.tfmaps[i]
+        num = 0.0
+        for t in qt:
+            hit = t in tf
+            if not hit and len(t) >= 3:
+                hit = any(dk.startswith(t) or t.startswith(dk) for dk in tf)
+            if not hit:
+                hit = any(syn in tf for syn in SYNONYMS.get(t, ()))
+            if hit:
+                num += self.idf(t)
+        den = sum(self.idf(t) for t in qt) or 1.0
+        return round(num / den, 3)
+
 # ── 可選的語意層（hybrid retrieval）──
 #
 # 為什麼需要：BM25 是字面比對，中文口語 query 會整個打偏。「壓縮爆掉救不回來」
@@ -247,6 +265,12 @@ def build_entries(fixdir):
         for t in fm.get('tags', []):
             ts = tokenize(t)
             fm_toks.extend(ts * 2)
+        # file-level title / first `**Rule:**`（每個 section 共用，取一次即可）
+        file_title = str(fm.get('title') or '').strip()
+        file_rule = None
+        rm = re.search(r'^\*\*Rule:\*\*[ \t]*(.+)$', body, re.M)
+        if rm:
+            file_rule = rm.group(1).strip()
         # sections
         secs = []
         cur_h = cur_b = ''
@@ -268,17 +292,17 @@ def build_entries(fixdir):
             m = re.search(r'##\s*§\d+\s+(.+)', hd)
             heading = m.group(1).strip() if m else '(untitled)'
             bi = blurbs.get(key, {})
-            entries.append(_build_entry(fid, fn, sn + 1, heading, fm, bi, cont, fm_toks))
+            entries.append(_build_entry(fid, fn, sn + 1, heading, fm, bi, cont, fm_toks, file_title, file_rule))
 
         # Fallback: files with frontmatter but no ## § sections (legacy format)
         # get a single whole-body entry so `find` can still reach them.
         if not secs and fm and (fm.get('symptoms') or fm.get('tags') or body.strip()):
             heading = str(fm.get('title') or '(untitled)')
-            entries.append(_build_entry(fid, fn, 1, heading, fm, {}, body, fm_toks))
+            entries.append(_build_entry(fid, fn, 1, heading, fm, {}, body, fm_toks, file_title, file_rule))
     return entries
 
 
-def _build_entry(fid, fn, sn, heading, fm, bi, cont, fm_toks=None):
+def _build_entry(fid, fn, sn, heading, fm, bi, cont, fm_toks=None, file_title=None, file_rule=None):
     toks = []
     # heading 2x
     to = tokenize(heading)
@@ -311,6 +335,8 @@ def _build_entry(fid, fn, sn, heading, fm, bi, cont, fm_toks=None):
         'file': fn,
         'section': f'§{sn}',
         'heading': heading,
+        'title': file_title or None,
+        'rule': file_rule or None,
         'type': str(fm.get('type') or 'defect'),
         'tokens': toks,
         # 原文（未分詞）供可選的語意層做 embedding。BM25 只吃 tokens，
@@ -394,8 +420,16 @@ def main():
         if len(top) >= limit:
             break
     if json_out:
+        by_key = {e['key']: i for i, e in enumerate(entries)}
+        covs = {}
+        if len(top) <= 8:
+            qt = set(tokenize(q))
+            for e, _ in top:
+                covs[e['key']] = bm.coverage(by_key[e['key']], qt)
         hits = [{'key': e['key'], 'file': e['file'], 'section': e['section'],
                  'heading': e['heading'], 'score': round(s, 3),
+                 'title': e['title'], 'rule': e['rule'],
+                 'coverage': covs.get(e['key']),
                  'trust_state': 'superseded' if e['superseded'] else e['trust_state'],
                  'last_verified': e['last_verified'],
                  'outcome': e['outcome']} for e, s in top]
