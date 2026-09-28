@@ -53,9 +53,12 @@ if [[ -n "${FIXINDEX_INDEX:-}" ]]; then
   _fix_abs="$(cd "$(dirname "${FIXINDEX_DIR:-$PWD/fixes}")" 2>/dev/null && pwd || echo "${FIXINDEX_DIR:-$PWD/fixes}")"
   if [[ "$_idx_abs" != "$_fix_abs" ]]; then
     unset FIXINDEX_INDEX
+    # 9684: 不加這個旗標，下面的 zshenv fallback 會把剛擋掉的跨庫 INDEX 再 eval 回來，
+    # 守衛形同虛設 —— 測試用 FIXINDEX_DIR 指去別處時會覆寫正式 FIX-INDEX.md。
+    _idx_rejected=1
   fi
 fi
-if [[ -z "${FIXINDEX_INDEX:-}" ]] && [[ -f "$HOME/.zshenv" ]]; then
+if [[ -z "${FIXINDEX_INDEX:-}" && -z "${_idx_rejected:-}" ]] && [[ -f "$HOME/.zshenv" ]]; then
   eval "$(grep '^export FIXINDEX_INDEX=' "$HOME/.zshenv" | head -1 || true)"
 fi
 if [[ "$FIXDIR_SOURCE" == fallback ]]; then
@@ -520,6 +523,10 @@ cmd_re_index() {
   } > "$tbl"
   rm -f "$scan"
 
+  # 9684: 新庫沒有索引檔時 awk 直接 can't open 且表格丟失。先補最小骨架（含 marker）。
+  if [[ ! -f "$INDEX_FILE" ]]; then
+    printf '# FIX-INDEX\n\n<!-- fixindex:table:start -->\n<!-- fixindex:table:end -->\n' > "$INDEX_FILE"
+  fi
   awk -v tbl="$tbl" '
     BEGIN { in_block=0 }
     /<!-- fixindex:table:start -->/ {
@@ -594,6 +601,13 @@ max_section() {
 # stopping at the next **...:** field marker or end of body. Blank-line separated.
 _extract_symptoms() {
   awk '
+    /^SYMPTOM:/ {
+      rest=$0; sub(/^SYMPTOM:[[:space:]]*/, "", rest)
+      if (in_sym && buf != "") { print buf }
+      in_sym=0; buf=""
+      if (rest != "") print rest
+      next
+    }
     /^\*\*Symptom:/ {
       rest=$0; sub(/^\*\*Symptom:\*\*[[:space:]]*/, "", rest)
       if (rest != "") print rest
@@ -677,7 +691,12 @@ cmd_fi() {
   local body
   body=$(cat)
   [[ -n "$body" ]] || die "no body provided on stdin"
-  with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$force_new" "$body"
+  # 9684: legacy 路徑原本只認 `**Symptom:**` markdown，餵 fxauto 的 KEY 行
+  # (SLUG:/TITLE:/SYMPTOM:) 會產出 title TODO + symptoms [] 的不可搜尋條目。
+  local slug_override
+  [[ -n "$title" ]] || title=$(awk '/^TITLE:/ {sub(/^TITLE:[[:space:]]*/,""); print; exit}' <<<"$body")
+  slug_override=$(awk '/^SLUG:/ {sub(/^SLUG:[[:space:]]*/,""); print; exit}' <<<"$body")
+  with_lock _cmd_fi_write "$domain" "$title" "$tags" "$do_push" "$force_new" "$body" "$slug_override"
 }
 
 # 0417: Claude 沙箱寫不進 FIXINDEX_DIR（memory/fixes 在 projects deny 下）→ 不要在
@@ -741,7 +760,7 @@ EOF
 }
 
 _cmd_fi_write() {
-  local domain="$1" title="$2" tags="$3" do_push="$4" force_new="$5" body="$6"
+  local domain="$1" title="$2" tags="$3" do_push="$4" force_new="$5" body="$6" slug_override="${7:-}"
 
   local target
   target=$(find_domain_file "$domain")
@@ -857,7 +876,7 @@ PYEOF
         echo "  誤以為誤配/誤寫 → 還原：git checkout -- ${target##*/}  (undo 快照 ${undo_backup##*/})"
   else
     local slug_name
-    slug_name=$(slugify "$domain")
+    slug_name=$(slugify "${slug_override:-$domain}")
 
     local id newfile
     id=$(next_id)
