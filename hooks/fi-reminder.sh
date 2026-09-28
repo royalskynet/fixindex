@@ -49,6 +49,7 @@ mutated = False
 debug_evidence = False
 tool_calls = 0
 assistant_turns = 0
+first_ts = last_ts = None   # fix 9696：牆鐘時長才是 OOM 風險指標，turn 數不是
 
 try:
     with open(tp, encoding='utf-8', errors='replace') as f:
@@ -61,6 +62,11 @@ try:
             except Exception:
                 continue
             t = rec.get('type')
+            _ts = rec.get('timestamp')
+            if _ts:
+                if first_ts is None:
+                    first_ts = _ts
+                last_ts = _ts
             msg = rec.get('message')
             blocks = msg.get('content') if isinstance(msg, dict) else None
             if t == 'assistant':
@@ -161,6 +167,33 @@ except Exception: _last = 0
 if assistant_turns >= 60 and assistant_turns - _last >= 15:
     open(_mark, 'w').write(str(assistant_turns))
     remind(f'本 session 已 {assistant_turns} turn：換題請 `fts new`；同題續做可 /compact；搜尋類派工 deep。')
+
+# ---- 長 session OOM 防線（fix 9696）----
+# Claude Code 的 mutableMessages 永不釋放（claude-code#25926），跑久了 JSON.stringify
+# 會在 V8 Zone 配置器 abort（SIGABRT，不可捕捉）。實測 4.76h 中招。
+# /compact 只裁 API token，不釋放那個陣列 → 必須 /clear。turn 數與此無關，用牆鐘時長。
+CLEAR_HOURS = 2.5      # 社群共識門檻；中招案例 4.76h
+REMIND_EVERY = 1.0     # 超過門檻後每小時再提醒一次
+_hours = None
+if first_ts and last_ts:
+    try:
+        from datetime import datetime
+        _a = datetime.fromisoformat(first_ts.replace('Z', '+00:00'))
+        _b = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+        _hours = (_b - _a).total_seconds() / 3600.0
+    except Exception:
+        _hours = None
+if _hours is not None and _hours >= CLEAR_HOURS:
+    _hmark = os.path.expanduser(
+        f'~/.claude/guard-state/clear-reminded-{os.path.basename(tp)[:8]}')
+    try: _hlast = float(open(_hmark).read())
+    except Exception: _hlast = 0.0
+    if _hours - _hlast >= REMIND_EVERY:
+        open(_hmark, 'w').write(f'{_hours:.2f}')
+        remind(f'本 session 已跑 {_hours:.1f} 小時（門檻 {CLEAR_HOURS}）：記憶體只增不減，'
+               '再跑下去有 SIGABRT 當掉的風險（fix 9696）。'
+               '換題 `fts new`；同題續做請 **/clear** 而非 /compact——'
+               '/compact 不釋放記憶體。真的掛了用 `happy resume <id>` 接得回來。')
 
 # ---- 規模門檻：小任務不值得 fi 成本 ----
 THRESHOLD = 40
