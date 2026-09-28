@@ -234,9 +234,10 @@ Sync: 寫入命令（new/re-index/supersede/doctor/fi）寫入前 git pull、結
 EOF
 }
 
-# Resolve "0007" or "7" → fixes/0007-*.md
+# Resolve "0007"、"7" 或 "0007#3"（find/mark 的顯示格式）→ fixes/0007-*.md
 resolve_id() {
-  local id="$1"
+  local id="${1%%#*}"   # 吃掉 #N：find/mark 印 ID#N，直接貼給 show 原本會炸在 $((10#...))
+  [[ $id =~ ^[0-9]+$ ]] || die "bad fix id: $1（格式 NNNN 或 NNNN#N）"
   printf -v id "%04d" "$((10#$id))"
   local f
   f=$(find "$FIXDIR" -maxdepth 1 -name "${id}-*.md" | head -1)
@@ -246,7 +247,8 @@ resolve_id() {
 
 cmd_show() {
   [[ $# -ge 1 ]] || die "usage: fixindex show <id>"
-  cat "$(resolve_id "$1")"
+  local f; f=$(resolve_id "$1") || exit 1   # die 在 subshell 擋不住外層，否則落到 cat "" 再吐一次錯
+  cat "$f"
 }
 
 cmd_list() {
@@ -1524,8 +1526,8 @@ _cmd_doctor_fix() {
 cmd_supersede() {
   [[ $# -eq 2 ]] || die "usage: fixindex supersede <old_id> <new_id>"
   local old_f new_f
-  old_f=$(resolve_id "$1")
-  new_f=$(resolve_id "$2")
+  old_f=$(resolve_id "$1") || exit 1
+  new_f=$(resolve_id "$2") || exit 1
   # mark old as superseded + 補 superseded_by（否則 lint 報「superseded 但皆空」假陽性）
   # superseded_by 必須是「取代者」的 id，也就是 new 檔的 id（曾誤用 old id 導致自我指向）。
   local new_id
