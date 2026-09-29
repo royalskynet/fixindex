@@ -29,7 +29,7 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
 
    最新 mtime 那支就是本 session（它正在被寫入）；同 cwd 有並行 session 時會取錯，屆時改用 scratchpad 目錄名（＝session id）。保留對話全文（金礦在對話裡），工具 input 砍到 300 字、輸出砍到 600 字——錯誤訊息幾乎都在開頭，砍尾巴不傷。實測 1.2 MB → 74 KB。
 
-1-2. **派遣一次 `Agent`**（`subagent_type: "general-purpose"`, `model: "sonnet"`, `run_in_background: false`），prompt 自含以下全部（子代理看不到本對話）：
+1-2. **派遣一次 `Agent`**（`subagent_type: "general-purpose"`, `model: "sonnet"`, `run_in_background: true`），prompt 自含以下全部（子代理看不到本對話）：
 
    - `$OUT` 的絕對路徑（步驟 0 產出，**不是原始 jsonl**）。要它**逐條掃過**，不是抽樣。
    - **窮舉候選**：每一段改動、每條報錯、每個重新摸索才搞懂的地方。連「糾正我誤解」也算（例：學到某設定其實沒生效、某 key 是錯的）。**反事實閘門**：凡出過錯、查到根因、改了做法的點，至少列進候選。
@@ -37,7 +37,9 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
    - 回報格式：每條給「候選核心 ≤80 字／建議類型 insight|symptom／查重指令與原始輸出／已存在 or 新」。**只回報，不寫入 fixindex。**
    - 判斷「值不值得記」不是它的工作，寧可多列。
 
-   `$OUT` 仍 >150 KB（超長 session）→ 切塊平行派，每塊獨立回報，主 session 合併。
+   `$OUT` 仍 >150 KB（超長 session）→ 切塊平行派，**同一個 response 內一次派完全部塊**（不要一塊一塊等），每塊獨立回報，主 session 合併。
+
+   背景派的理由：每個子代理要跑十幾次 `fixindex find`／`insights`，實測單塊 4–5 分鐘，前景派期間主 session 完全沒輸出，使用者會以為卡死。背景派時 harness 完成後會叫回來，使用者中途還能插話。
 
    子代理被 sensitive-canary 擋住讀 `$OUT`（內含疑似憑證字串）→ 它停手回報阻斷點，主 session 改用自己 context 內的記憶直接掃，不繞過 guard。
 
