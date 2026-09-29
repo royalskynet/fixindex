@@ -11,9 +11,37 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
 
 ## 程序
 
-1. **窮舉候選**：掃本 session 每一段改動、每條報錯、每個重新摸索才搞懂的地方。連「糾正我誤解」也算（例：學到某設定其實沒生效、某 key 是錯的）。**反事實閘門**：凡出過錯、查到根因、改了做法的點，至少列進候選。
-2. **去重**：對每個候選，先自己 `fixindex find "<核心關鍵字>"` 與 `fixindex insights "<主題>"`，已存在的（或等效已記的）**略過**，不重複記。
-3. **收斂**：過濾掉一次性、專案私有、無重現價值的。只留通過「下次找得到才有意義」閘門的。
+步驟 1-2 是機械活（讀 transcript、逐條查重），派 sonnet 子代理做；步驟 3 起的判斷留主 session。
+
+0. **抽出精簡 transcript**（**不可省**：原始 jsonl 一個中等 session 就 1.2 MB／約 300k token，超過子代理 window，直接餵進去只會爆掉或被迫抽樣然後硬掰）：
+
+   ```bash
+   T=$(ls -t ~/.claude/projects/"$(pwd | sed 's#[/.]#-#g')"/*.jsonl | head -1)
+   OUT="${TMPDIR:-/tmp}/fi-scan-$$.txt"
+   jq -r 'select(.type=="user" or .type=="assistant") | .message.content |
+     if type=="array" then (map(
+       if .type=="text" then .text
+       elif .type=="tool_use" then "TOOL "+.name+" "+((.input|tostring)[0:300])
+       elif .type=="tool_result" then "RESULT "+((.content|tostring)[0:600])
+       else empty end)|join("\n")) else tostring end' "$T" > "$OUT"
+   wc -c "$OUT"
+   ```
+
+   最新 mtime 那支就是本 session（它正在被寫入）；同 cwd 有並行 session 時會取錯，屆時改用 scratchpad 目錄名（＝session id）。保留對話全文（金礦在對話裡），工具 input 砍到 300 字、輸出砍到 600 字——錯誤訊息幾乎都在開頭，砍尾巴不傷。實測 1.2 MB → 74 KB。
+
+1-2. **派遣一次 `Agent`**（`subagent_type: "general-purpose"`, `model: "sonnet"`, `run_in_background: false`），prompt 自含以下全部（子代理看不到本對話）：
+
+   - `$OUT` 的絕對路徑（步驟 0 產出，**不是原始 jsonl**）。要它**逐條掃過**，不是抽樣。
+   - **窮舉候選**：每一段改動、每條報錯、每個重新摸索才搞懂的地方。連「糾正我誤解」也算（例：學到某設定其實沒生效、某 key 是錯的）。**反事實閘門**：凡出過錯、查到根因、改了做法的點，至少列進候選。
+   - **逐條去重**：每個候選跑 `fixindex find "<核心關鍵字>"` 與 `fixindex insights "<主題>"`，把原始輸出附在該候選下。
+   - 回報格式：每條給「候選核心 ≤80 字／建議類型 insight|symptom／查重指令與原始輸出／已存在 or 新」。**只回報，不寫入 fixindex。**
+   - 判斷「值不值得記」不是它的工作，寧可多列。
+
+   `$OUT` 仍 >150 KB（超長 session）→ 切塊平行派，每塊獨立回報，主 session 合併。
+
+   子代理被 sensitive-canary 擋住讀 `$OUT`（內含疑似憑證字串）→ 它停手回報阻斷點，主 session 改用自己 context 內的記憶直接掃，不繞過 guard。
+
+3. **收斂**（主 session 做）：對子代理回報的候選，過濾掉一次性、專案私有、無重現價值的。只留通過「下次找得到才有意義」閘門的。子代理標「已存在」的核對一下查重輸出是否真的等效，不盲信。
 4. **逐項輸出候選**：每條給
    - 類型（insight / symptom）
    - 一段 ≤80 字核心（這條在講什麼、為什麼值得記）
