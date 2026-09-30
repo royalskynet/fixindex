@@ -117,8 +117,8 @@ sync_push() {
   _sync_disabled && return 0
   local args=() p out rc
   for p in "$@"; do args+=(--path "$p"); done
-  out=$(python3 "$FX_DIR/fxsync.py" push "${args[@]}" 2>&1)
-  rc=$?
+  # set -e 下裸 `out=$(…)` 失敗即整支退出，die 印不到——conflict 訊息被吞（issue #10 測試抓到）
+  out=$(python3 "$FX_DIR/fxsync.py" push "${args[@]}" 2>&1) && rc=0 || rc=$?
   if [[ $rc -eq 2 ]]; then die "$out"; fi
   [[ -n "$out" ]] && printf '%s\n' "$out"
   return 0
@@ -1790,6 +1790,17 @@ main() {
   done
   # ponytail: bash 3.2 set -u 下空陣列展開即 unbound，${a+"${a[@]}"} 是唯一可攜寫法
   set -- ${args[@]+"${args[@]}"}
+  # 寫入命令整段（pull → 寫 → push）持同一把 repo 鎖（issue #10）；已持鎖的子行程不重包
+  case "${1:-}" in
+    new|doctor|re-index|supersede|mark|outcome|rule|fi|auto)
+      if [[ -z "${FIXINDEX_REPO_LOCK_HELD:-}" ]] && ! _sync_disabled \
+         && [[ "${2:-}" != "-h" && "${2:-}" != "--help" ]]; then
+        # FIXINDEX_INDEX 帶已解析值：_idx_rejected 不跨 exec，子行程會把 zshenv 的
+        # 正式 INDEX 再 eval 回來、覆寫真庫（9684 同型）
+        FIXINDEX_INDEX="$INDEX_FILE" exec python3 "$FX_DIR/fxsync.py" hold -- \
+          "$FX_DIR/$(basename "${BASH_SOURCE[0]}")" "$@"
+      fi ;;
+  esac
   # 深度守衛：最外層命令設 1 並 export；fxauto 反呼的內層 re-index/supersede 由
   # fxsync.child_env() 升到 ≥2 → 自動啞（消除雙 commit，不靠各處手動傳 flag）。
   export FIXINDEX_SYNC_DEPTH=1

@@ -21,6 +21,7 @@ CLI:
   fxsync.py push [--path P ...] [--msg M]  exit 2 conflict/fatal（die）；0 ok/noop/offline
   fxsync.py state [--json]                 唯讀本地狀態（不碰網路）
   fxsync.py flush                          有 pending marker 就補推
+  fxsync.py hold -- CMD ...                持 repo 鎖跑整個寫入命令（issue #10）
 """
 from __future__ import annotations
 
@@ -57,6 +58,7 @@ CO_AUTHORS = [
     'Happy <noreply@anthropic.com>',
 ]
 PENDING_MARKER = 'fixindex-pending-push'
+LOCK_HELD_ENV = 'FIXINDEX_REPO_LOCK_HELD'
 PROTECTED_REMOTES_DEFAULT = ['royalskynet/fixindex-log']
 
 
@@ -246,7 +248,15 @@ def _repo_lock(root, timeout=20):
     ponytail: one flock'd file, no lock manager. A timeout or a missing fcntl
     falls through UNLOCKED rather than failing the caller — a read-only query
     that races is the old behaviour, a read-only query that dies is worse.
+
+    Re-entrant across processes: a write command runs under `fxsync.py hold`
+    (issue #10), which holds this lock for the whole pull → write → push and
+    exports FIXINDEX_REPO_LOCK_HELD; its own pull/push children skip the flock
+    instead of deadlocking on their parent.
     """
+    if os.environ.get(LOCK_HELD_ENV) == _real(root):
+        yield True
+        return
     path = os.path.join(root, '.git', 'fixindex-sync.lock')
     try:
         fh = open(path, 'w')
@@ -294,7 +304,14 @@ def pull(fixdir, soft=False, after_rebase=None):
             print(f"fixindex: debug — {root}/.git 唯讀（沙箱），略過 pull",
                   file=sys.stderr)
         return {'ok': True, 'skipped': True, 'reason': 'readonly-sandbox', 'stderr': ''}
-    with _repo_lock(root):
+    with _repo_lock(root) as got:
+        if not got and soft:
+            # 拿不到鎖＝有 writer 正在 pull→寫→push；此時 --autostash 會 stash 它的
+            # 半成品（issue #10）。唯讀查詢寧可讀舊資料，不碰工作樹。
+            return {'ok': True, 'skipped': True, 'reason': 'locked-by-writer', 'stderr': ''}
+        if not got:
+            print("fixindex: WARNING — 拿不到 repo 鎖，寫入前 pull 在無鎖下執行"
+                  "（併發 writer 可能互相 autostash，issue #10）", file=sys.stderr)
         rc, out, err = _run(['git', '-C', root, 'pull', '--rebase', '--autostash'])
         # A FETCH_HEAD already corrupted by an earlier unserialised race stays
         # corrupted until something overwrites it. One clean fetch does that.
@@ -321,6 +338,32 @@ def pull(fixdir, soft=False, after_rebase=None):
     if not soft:
         flush_pending(fixdir)
     return {'ok': True, 'skipped': False, 'reason': '', 'stderr': ''}
+
+
+def hold(fixdir, cmd):
+    """持 _repo_lock 跑整個寫入命令（pull → 寫 → push 同一把鎖，issue #10）。
+
+    鎖只在 pull/push 兩頭拿時，中間 A 寫一半的工作樹會被 B 的
+    `pull --rebase --autostash` stash/rebase/restore，衝突標記被 A 原樣 commit。
+    子行程經 LOCK_HELD_ENV 重入，不自鎖。持鎖期間唯讀 pull 等不到就跳過。
+
+    ponytail: 同機序列化而已；跨機仍靠 pull-first + rebase + 撞號掃描。
+    拿不到鎖（逾時／無 fcntl）照跑但出聲——寫入不能沿用唯讀的靜默 fallthrough。"""
+    if not cmd:
+        print('fxsync hold: 缺命令', file=sys.stderr)
+        return 2
+    root = None if _sync_disabled() else repo_root(fixdir)
+    if not root or _git_dir_readonly(root):
+        return subprocess.call(cmd)
+    timeout = float(os.environ.get('FIXINDEX_WRITE_LOCK_TIMEOUT', '120'))
+    with _repo_lock(root, timeout=timeout) as got:
+        env = dict(os.environ)
+        if got:
+            env[LOCK_HELD_ENV] = _real(root)
+        else:
+            print(f"fixindex: WARNING — {timeout:.0f}s 內拿不到 repo 鎖，寫入在無鎖下執行"
+                  "（併發 writer 可能互相 autostash，issue #10）", file=sys.stderr)
+        return subprocess.call(cmd, env=env)
 
 
 def _rebase_and_retry(root, fixdir, paths, message, after_rebase, detail):
@@ -577,6 +620,8 @@ def main():
     if cmd == 'flush':
         flush_pending(fixdir)
         return 0
+    if cmd == 'hold':
+        return hold(fixdir, rest[1:] if rest[:1] == ['--'] else rest)
     print(__doc__.strip(), file=sys.stderr)
     return 1
 
