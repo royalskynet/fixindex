@@ -947,10 +947,11 @@ PYEOF
   fi
 
   cmd_re_index
-  if [[ -n "${target:-}" ]]; then
-    sync_push "$target" "$INDEX_FILE"
-  else
+  # --new 時 target 仍是匹配到的舊檔，要以 newfile 為準，否則新檔不進 commit（9775）
+  if [[ -n "${newfile:-}" ]]; then
     sync_push "$newfile" "$INDEX_FILE"
+  else
+    sync_push "$target" "$INDEX_FILE"
   fi
 }
 # Extract frontmatter block (lines between --- markers, excluding the markers)
