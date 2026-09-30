@@ -11,7 +11,7 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 """
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
-import time, unicodedata
+import time, unicodedata, socket
 try:
     import fcntl
 except ImportError:  # Windows: no flock -> msvcrt byte-range lock, same non-blocking semantics
@@ -671,6 +671,14 @@ def find_duplicate(title, etype='defect'):
     return best
 
 
+def _verified_on():
+    """本機 hostname（去 .local 字尾）+ 本地今天，供 build_entry* 自動蓋章。"""
+    host = socket.gethostname()
+    if host.endswith('.local'):
+        host = host[:-len('.local')]
+    return f'{host} {datetime.date.today().isoformat()}'
+
+
 def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail='',
                 evidence=None, rule=''):
     """Build a defect entry scaffold. If evidence is non-empty AND verify is
@@ -691,6 +699,7 @@ def build_entry(fid, title, symptoms, root, fix, verify, slug, tags=None, detail
     parts.append('status: active')
     parts.append('supersedes: []')
     parts.append('related: []')
+    parts.append(f'verified_on: {_verified_on()}')
     parts.append('---')
     parts.append('')
     parts.append(f'# {fid} {title}')
@@ -902,6 +911,7 @@ def build_entry_insight(fid, title, context, insight, implication, revisit, slug
     parts.append('status: active')
     parts.append('supersedes: []')
     parts.append('related: []')
+    parts.append(f'verified_on: {_verified_on()}')
     parts.append('---')
     parts.append('')
     parts.append(f'# {fid} {title}')
