@@ -1819,7 +1819,9 @@ main() {
     doctor)    warn_if_default_dir
                if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_doctor "$@"; else sync_pull; cmd_doctor "$@"; fi ;;
     status)    warn_if_default_dir; _cmd_status_fxstatus "$@" ;;
-    re-index)  warn_if_default_dir; sync_pull; cmd_re_index; sync_push "$INDEX_FILE" ;;
+    # 手改條目後 re-index 是既定追加流程（fix 0208），只推索引會讓條目改動永遠留在工作樹（2026-09-30）
+    re-index)  warn_if_default_dir; sync_pull; cmd_re_index
+               sync_push "$INDEX_FILE" $(git -C "$FIXDIR" ls-files -m -d -o --exclude-standard -- '*.md' 2>/dev/null | sort -u | sed "s#^#$FIXDIR/#") ;;
     supersede) warn_if_default_dir; sync_pull; cmd_supersede "$@" ;;
     mark)      warn_if_default_dir; sync_pull; cmd_mark "$@" ;;
     outcome)   warn_if_default_dir; sync_pull; cmd_outcome "$@" ;;
