@@ -7,7 +7,13 @@
 # exit: expect:pass 條目 FAIL → 1；否則 0
 # --json: 輸出一個 JSON 陣列（供 watchdog 解析）
 
-MANIFEST="${INDIRECTION_MANIFEST:-$(dirname "$0")/indirection-manifest.json}"
+# ponytail: manifest 實際住在 ~/.config/fixindex（不在 tools/），直接跑本腳本原本必 FATAL
+MANIFEST="${INDIRECTION_MANIFEST:-}"
+if [ -z "$MANIFEST" ]; then
+  for _c in "$(dirname "$0")/indirection-manifest.json" "$HOME/.config/fixindex/indirection-manifest.json"; do
+    [ -f "$_c" ] && { MANIFEST="$_c"; break; }
+  done
+fi
 MODE="${1:-table}"
 
 command -v jq >/dev/null 2>&1 || { echo "FATAL: jq not found" >&2; exit 2; }
