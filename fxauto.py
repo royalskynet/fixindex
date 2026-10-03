@@ -767,7 +767,10 @@ def _run_index(cmd, *args):
     env['FIXINDEX_NO_SYNC'] = '1'
     quiet = not cmd.startswith('re-index')
     if cmd == 're-index':
-        return subprocess.run(launch + cmd.split(' ') + list(args), env=env)
+        # stdout→stderr：「re-indexed: …」混進 fi 的 JSON stdout 會讓呼叫端解析失敗
+        # （同 0165 類）；警告仍可見
+        return subprocess.run(launch + cmd.split(' ') + list(args), env=env,
+                              stdout=sys.stderr)
     if quiet:
         return subprocess.run(launch + cmd.split(' ') + list(args), env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
