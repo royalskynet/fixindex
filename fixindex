@@ -341,8 +341,8 @@ cmd_grep() {
   $RG -i --heading --line-number -F "$1" "$FIXDIR"/[0-9]*.md
 }
 
-# 配號只有一套：委派 fxauto._scan_next_id()。舊版在這裡自己算 max+1，
-# 9999 滿了照樣給 10000，和 fxauto 的「補空號」分岔，2026-10-04 撞出兩筆 10000。
+# 配號只有一套：委派 fxauto._scan_next_id()（數值 max+1，%04d 只是最小寬度）。
+# 舊版兩套各算各的，2026-10-04 撞出兩筆 10000。
 # ponytail: 鎖仍是各管各的（這裡 mkdir .fixindex.lock、fxauto flock .id.lock），
 # bash 與 fxauto 同時寫會撞號；new／fi <domain> 是舊介面少用，真撞了靠 rebase 改號兜底。
 next_id() {
