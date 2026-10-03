@@ -30,6 +30,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -340,6 +341,20 @@ def pull(fixdir, soft=False, after_rebase=None):
     return {'ok': True, 'skipped': False, 'reason': '', 'stderr': ''}
 
 
+def _spawnable(cmd):
+    """Windows CreateProcess 不認 shebang：script 經 bash 跑，否則 WinError 193（fix 9983）。"""
+    if os.name != 'nt' or not cmd:
+        return cmd
+    try:
+        with open(cmd[0], 'rb') as f:
+            if f.read(2) != b'#!':
+                return cmd
+    except OSError:
+        return cmd
+    bash = shutil.which('bash')
+    return [bash, *cmd] if bash else cmd
+
+
 def hold(fixdir, cmd):
     """持 _repo_lock 跑整個寫入命令（pull → 寫 → push 同一把鎖，issue #10）。
 
@@ -353,17 +368,18 @@ def hold(fixdir, cmd):
         print('fxsync hold: 缺命令', file=sys.stderr)
         return 2
     root = None if _sync_disabled() else repo_root(fixdir)
+    # 子行程一律帶重入標記：fixindex 只看它非空決定要不要再包 hold，
+    # 沒鎖（無 fcntl／逾時／非 repo）時不帶 → 無限自我重包（fix 9983）
+    env = dict(os.environ)
+    env[LOCK_HELD_ENV] = _real(root) if root else '1'
     if not root or _git_dir_readonly(root):
-        return subprocess.call(cmd)
+        return subprocess.call(_spawnable(cmd), env=env)
     timeout = float(os.environ.get('FIXINDEX_WRITE_LOCK_TIMEOUT', '120'))
     with _repo_lock(root, timeout=timeout) as got:
-        env = dict(os.environ)
-        if got:
-            env[LOCK_HELD_ENV] = _real(root)
-        else:
+        if not got:
             print(f"fixindex: WARNING — {timeout:.0f}s 內拿不到 repo 鎖，寫入在無鎖下執行"
                   "（併發 writer 可能互相 autostash，issue #10）", file=sys.stderr)
-        return subprocess.call(cmd, env=env)
+        return subprocess.call(_spawnable(cmd), env=env)
 
 
 def _rebase_and_retry(root, fixdir, paths, message, after_rebase, detail):
