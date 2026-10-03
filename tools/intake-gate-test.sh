@@ -61,8 +61,9 @@ if [ $rc -ne 0 ]; then ng "4.4c 逃生門 exit=$rc (want 0)"; else ok "4.4c 逃�
 #   與 find_domain_file_auto 雙 miss，只剩 LINKER 能收容。
 #   斷言只接受 "linked" —— 不接受 created/appended，那是 LINKER 沒生效時的 fallback
 #   輸出，混進允許集合會讓斷言恆真 (見 fixindex 0590)。
+# seed 明示 SLUG：4770e9d 起 slug 由 ROOT 推導，不明示會變 gammaqq-deltaqq-epsilonqq 被 domain 收容（fix 10004）
 newlib; B=$NL
-printf 'SYMPTOM: alphaqq betaqq 服務啟動失敗\nROOT: gammaqq deltaqq epsilonqq 設定錯誤\nFIX: 改回預設值\nRULE: 測試用泛化規則\n' \
+printf 'SLUG: alphaqq-betaqq\nSYMPTOM: alphaqq betaqq 服務啟動失敗\nROOT: gammaqq deltaqq epsilonqq 設定錯誤\nFIX: 改回預設值\nRULE: 測試用泛化規則\n' \
   | FIXINDEX_DIR="$B/fixes" FIXINDEX_INDEX="$B/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$B/seed.json" 2>/dev/null
 printf 'SYMPTOM: gammaqq deltaqq epsilonqq\nROOT: x\nFIX: y\n' \
   | FIXINDEX_DIR="$B/fixes" FIXINDEX_INDEX="$B/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$B/o4.json" 2>/dev/null
@@ -75,11 +76,11 @@ if grep -q '## §2' "$B"/fixes/[0-9]*.md 2>/dev/null; then ok "4.5 既有條目�
 # 4.5x 反向自檢: 把門檻拉到不可能達到 (9.9) → 同一輸入必須改走建新檔。
 #   這條在證明上面的斷言不是恆真 —— 關掉被測功能它會轉紅 (fixindex 0590 的 VERIFY)。
 newlib; C=$NL
-printf 'SYMPTOM: alphaqq betaqq 服務啟動失敗\nROOT: gammaqq deltaqq epsilonqq 設定錯誤\nFIX: 改回預設值\nRULE: 測試用泛化規則\n' \
+printf 'SLUG: alphaqq-betaqq\nSYMPTOM: alphaqq betaqq 服務啟動失敗\nROOT: gammaqq deltaqq epsilonqq 設定錯誤\nFIX: 改回預設值\nRULE: 測試用泛化規則\n' \
   | FIXINDEX_DIR="$C/fixes" FIXINDEX_INDEX="$C/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 "$PY" "$FXAUTO" --commit > "$C/seed.json" 2>/dev/null
 printf 'SYMPTOM: gammaqq deltaqq epsilonqq\nROOT: x\nFIX: y\nRULE: r\n' \
   | FIXINDEX_DIR="$C/fixes" FIXINDEX_INDEX="$C/FIX-INDEX.md" FIXINDEX_NO_SYNC=1 FIXINDEX_LINK_COVERAGE=9.9 "$PY" "$FXAUTO" --commit > "$C/o4x.json" 2>/dev/null
-if grep -q '"linked"' "$C/o4x.json"; then ng "4.5x 門檻 9.9 仍 linked → 4.5 斷言恆真"; else ok "4.5x 門檻 9.9 不再 linked (斷言非恆真)"; fi
+if grep -q '"created"' "$C/o4x.json" && ! grep -q '"linked"' "$C/o4x.json"; then ok "4.5x 門檻 9.9 改走 created (斷言非恆真)"; else ng "4.5x 門檻 9.9 未走 created: $(cat "$C/o4x.json")"; fi
 
 # 4.6 COMPRESSOR 不阻斷: FIXINDEX_NO_BLURB=1 逃生門 + LLM 不可用(本機 20130) 皆 exit 0
 t0=$(date +%s)

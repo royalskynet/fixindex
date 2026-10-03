@@ -196,28 +196,29 @@ RC=$(mx audit "$SD/fixes/9999-link.md" --json >/dev/null 2>&1; echo $?)
 rm -rf "$SD"
 
 # ---------- C9: repeat 第2次不提示、第3次恰一提示；failed outcome 達2恰一提示 ----------
+# fixture 用 server 不用 http：<5 字 token 不做 dash-prefix 匹配（防亂吸），http-500 不會被 domain 收容
 SD=$(newlib)
-BASE="$SD/fixes/0888-http-500.md"
+BASE="$SD/fixes/0888-server-500.md"
 cat > "$BASE" <<'EOF'
 ---
 id: "0888"
-slug: http-500
+slug: server-500
 title: Network issue log
 symptoms: []
 status: active
 ---
-# 0888 http-500
+# 0888 server-500
 
-## §1 HTTP 500 on login
+## §1 Server 500 on login
 **Symptom:** login 500
 **Verify:** v
 
-## §2 HTTP 500 on logout
+## §2 Server 500 on logout
 **Symptom:** logout 500
 **Verify:** v
 EOF
 # append 第2筆類似（檔內變 3 個相似 heading）→ 恰一提示
-OUT=$(printf 'SYMPTOM: HTTP 500 on signup\nFIX: f\nVERIFY: v\n' | FIXINDEX_STRICT_DIR=1 FIXINDEX_TEST=1 FIXINDEX_DIR="$SD/fixes" FIXINDEX_INDEX="$SD/FIX-INDEX.md" "$PY" "$FXAUTO" --commit 2>&1)
+OUT=$(printf 'SYMPTOM: Server 500 on signup\nFIX: f\nVERIFY: v\n' | FIXINDEX_STRICT_DIR=1 FIXINDEX_TEST=1 FIXINDEX_DIR="$SD/fixes" FIXINDEX_INDEX="$SD/FIX-INDEX.md" "$PY" "$FXAUTO" --commit 2>&1)
 N=$(echo "$OUT" | grep -c 'FIXINDEX_REPEAT_EVAL')
 [ "$N" -eq 1 ] && ok "C9 3rd similar exactly one hint ($OUT)" || ng "C9 3rd similar exactly one hint (n=$N $OUT)"
 rm -rf "$SD"
