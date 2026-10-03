@@ -59,7 +59,7 @@ def index_state(fixdir, index):
         s["errors"].append(f"FIX-INDEX.md missing: {index}（先跑 fixindex re-index）")
         return s
     newest = 0.0
-    for f in fixdir.glob("[0-9][0-9][0-9][0-9]-*.md"):
+    for f in fixdir.glob("[0-9][0-9][0-9][0-9]*-*.md"):
         try:
             newest = max(newest, f.stat().st_mtime)
         except OSError:
@@ -83,7 +83,7 @@ def lint_state(fixdir):
     if not fixdir.is_dir():
         return s
     rows = {}
-    for f in sorted(fixdir.glob("[0-9][0-9][0-9][0-9]-*.md")):
+    for f in sorted(fixdir.glob("[0-9][0-9][0-9][0-9]*-*.md")):
         text = f.read_text(encoding="utf-8", errors="replace")
         fm, _ = fxmeta.parse_frontmatter_full(text)
         status = str(fm.get("status") or "").strip().strip('"\'').split()[0] if fm.get("status") else ""
@@ -92,12 +92,12 @@ def lint_state(fixdir):
             supersedes = [supersedes] if supersedes.strip() else []
         ids = []
         for tgt in supersedes:
-            m = re.match(r"(\d{4})", str(tgt).strip().strip('"\'[]'))
+            m = re.match(r"(\d{4,})", str(tgt).strip().strip('"\'[]'))
             if m:      # "[]"、自由文字等非 id 值一律略過；"0281-§3" 取前四碼
                 ids.append(m.group(1))
         by = str(fm.get("superseded_by") or "").strip().strip('"\'')
-        m = re.match(r"(\d{4})", by)
-        rows[f.name[:4]] = {"name": f.name, "status": status, "sup": ids, "by": m.group(1) if m else ""}
+        m = re.match(r"(\d{4,})", by)
+        rows[f.name.split('-', 1)[0]] = {"name": f.name, "status": status, "sup": ids, "by": m.group(1) if m else ""}
     known = set(rows)
     for me, r in rows.items():
         # 被取代的 stub（空殼佔位）用 superseded_by 表達「被誰取代」——合法。

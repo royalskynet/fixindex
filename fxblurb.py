@@ -117,7 +117,7 @@ def backfill(force=False, limit=0):
             if h not in hashes or force:
                 need = True
             secs.append((f"§{num} {heading}".strip() if heading else f"§{num}",
-                         content, h, f"{os.path.basename(fp).replace('.md','')[:4]}#{len(secs)+1}"))
+                         content, h, f"{os.path.basename(fp).replace('.md','').split('-', 1)[0]}#{len(secs)+1}"))
         if need:
             pending.append((fp, secs))
         if limit and len(pending) >= limit:

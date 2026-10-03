@@ -253,7 +253,7 @@ def build_entries(fixdir):
     files = sorted(glob.glob(os.path.join(fixdir, '[0-9]*.md')))
     for fp in files:
         fn = os.path.basename(fp)
-        fid = fn[:4]
+        fid = fn.split('-', 1)[0]
         fm, body = _parse_file(fp)
         # B1 (WO-2026-09-06)：frontmatter tokens 每檔只算一次，供所有 section 共用。
         # 之前 _build_entry 對每個 ## § section 都重新 tokenize symptoms/tags
@@ -412,7 +412,7 @@ def main():
     top = []
     for i, s in results:
         e = entries[i]
-        fid = e['file'][:4]
+        fid = e['file'].split('-', 1)[0]
         if fid in seen or (e['superseded'] and fid in absorbed):
             continue
         seen[fid] = True

@@ -93,15 +93,10 @@ def _intake_gate(rule):
 
 def _scan_next_id():
     """純掃描：取現有最大 ID + 1（不鎖，呼叫端須已持有 id_lock）。"""
-    used = {int(m.group(1)) for f in _glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md'))
-            if (m := re.match(r'(\d{4})-', os.path.basename(f)))}
-    if not used:
-        return '0001'
-    if max(used) < 9999:
-        return f'{max(used) + 1:04d}'
-    # ponytail: ID 寫死 4 位數（[:4]／\d{4} 散在 15+ 處），9999 滿了改從 1000 起補空號；
-    # 1000–9998 也補滿才需要改成 5 位數。
-    return f'{min(set(range(1000, 10000)) - used):04d}'
+    # 同 adr-tools：數值取 max（不能用字典序，'9999' > '10000'），%04d 只是最小寬度。
+    used = [int(m.group(1)) for f in _glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md'))
+            if (m := re.match(r'(\d+)-', os.path.basename(f)))]
+    return f'{max(used, default=0) + 1:04d}'
 
 
 ID_LOCK_TIMEOUT = float(os.environ.get('FIXINDEX_ID_LOCK_TIMEOUT', '5'))
@@ -214,7 +209,7 @@ def resolve_id_collision(paths, renames=None):
     out, renamed = [], []
     for p in paths:
         base = os.path.basename(p)
-        m = re.match(r'^(\d{4})-', base)
+        m = re.match(r'^(\d+)-', base)
         if not m or not os.path.exists(p):
             out.append(p)
             continue
@@ -297,7 +292,7 @@ def find_related(query, etype='defect'):
             return None
         if best[2] < LINK_COVERAGE:
             return None
-        return (best[0]['file'][:4], round(best[2], 2))
+        return (best[0]['file'].split('-', 1)[0], round(best[2], 2))
     except Exception:
         return None
 
@@ -671,7 +666,7 @@ def find_duplicate(title, etype='defect'):
         if _dup_fires(ts, tgt):
             overlap = len(tgt & ts) / len(ts)   # 新詞涵蓋舊標題比例
             if best is None or overlap > best[1]:
-                best = (os.path.basename(fp)[:4], round(overlap, 2))
+                best = (os.path.basename(fp).split('-', 1)[0], round(overlap, 2))
     return best
 
 
@@ -1039,12 +1034,12 @@ def repeat_eval_hint(path, title, symps, new_secn=None):
         if hs and inc and (len(inc & hs) / max(len(hs), 1)) >= 0.5:
             similar += 1
             if similar >= 3 and not first_reason:
-                first_reason = f'FIXINDEX_REPEAT_EVAL key={base[:4]}#{num} reason=repeat recommendation=regression_test'
+                first_reason = f'FIXINDEX_REPEAT_EVAL key={base.split("-", 1)[0]}#{num} reason=repeat recommendation=regression_test'
         # failed_outcome: target section (or any section when appending new)
         if not first_reason and (new_secn is None or num == new_secn):
             _, _, outcome, _ = fxmeta.section_summary(body)
             if outcome.get('failed', 0) >= 2:
-                first_reason = f'FIXINDEX_REPEAT_EVAL key={base[:4]}#{num} reason=failed_outcome recommendation=health_check'
+                first_reason = f'FIXINDEX_REPEAT_EVAL key={base.split("-", 1)[0]}#{num} reason=failed_outcome recommendation=health_check'
     # 在 return 前發，不是在三個呼叫點各加一次——少三處要同步的地方，
     # 未來新增呼叫點也自動涵蓋。判定邏輯與 stderr 輸出完全沒動。
     _emit_repeat_eval_event(first_reason)

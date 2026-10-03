@@ -162,7 +162,7 @@ ORDER = ['id', 'slug', 'type', 'title', 'tags', 'symptoms', 'status', 'supersede
 # ─── §4 section-level trust metadata（唯一權威）──────────────
 VALID_STATES = {'unverified', 'verified', 'stale', 'blocked', 'superseded'}
 VALID_OUTCOMES = {'helpful', 'irrelevant', 'failed'}
-SECTION_KEY = re.compile(r'^(\d{4})#(\d+)$')
+SECTION_KEY = re.compile(r'^(\d{4,})#(\d+)$')
 SECTION_HEAD = re.compile(r'^##\s*§(\d+)\s*(.*)$')
 BOLD_FIELD = re.compile(r'^\*\*([A-Za-z][A-Za-z- ]*?):\*\*\s*(.*)$')
 TRUST_LABELS = {'State': 'state', 'Evidence': 'evidence',
@@ -293,7 +293,7 @@ def mark(path, key, state, evidence=None, date=None, reason=None):
     with open(path, encoding='utf-8') as f:
         txt = f.read()
     fm, _ = parse_frontmatter_full(txt)
-    fm_id = str(fm.get('id') or '').strip() or os.path.basename(path)[:4]
+    fm_id = str(fm.get('id') or '').strip() or os.path.basename(path).split('-', 1)[0]
     if str(fm_id).zfill(4) != f'{fid:04d}':
         return {'error': f'id mismatch: frontmatter {str(fm_id).zfill(4)} != key {fid:04d}#{secnum}', 'key': key}
 
@@ -442,7 +442,7 @@ def rule(path, key, text):
     with open(path, encoding='utf-8') as f:
         txt = f.read()
     fm, _ = parse_frontmatter_full(txt)
-    fm_id = str(fm.get('id') or '').strip() or os.path.basename(path)[:4]
+    fm_id = str(fm.get('id') or '').strip() or os.path.basename(path).split('-', 1)[0]
     if str(fm_id).zfill(4) != f'{fid:04d}':
         return {'error': f'id mismatch: frontmatter {str(fm_id).zfill(4)} != key {fid:04d}#{secnum}', 'key': key}
 
@@ -764,7 +764,7 @@ def main():
         for num, head, body in secs:
             a = audit_section(body, num, head)
             if a['problems']:
-                issues.append({'key': f'{str(fm.get("id") or "")[:4]}#{num}', 'problems': a['problems']})
+                issues.append({'key': f'{str(fm.get("id") or "")}#{num}', 'problems': a['problems']})
         nums = [n for n, _, _ in secs]
         dup = [n for n in set(nums) if nums.count(n) > 1]
         if dup:

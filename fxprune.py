@@ -27,7 +27,7 @@ def candidates(fixdir):
     """回傳 list of (id, title, reason)。純規則、無副作用。"""
     out = []
     for fp in sorted(glob.glob(os.path.join(fixdir, '[0-9]*.md'))):
-        fid = os.path.basename(fp)[:4]
+        fid = os.path.basename(fp).split('-', 1)[0]
         try:
             txt = open(fp, encoding='utf-8').read()
         except Exception:

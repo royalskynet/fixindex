@@ -255,7 +255,7 @@ cmd_show() {
 }
 
 cmd_list() {
-  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md; do
     [[ -e "$f" ]] || continue
     local base id slug title
     base=$(basename "$f" .md)
@@ -473,7 +473,7 @@ cmd_re_index() {
   tmp=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
   tbl=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
   scan=$(mktemp "${TMPDIR:-/tmp}/fixindex.XXXXXX")
-  local files=("$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md)
+  local files=("$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md)
   [[ -e "${files[0]}" ]] || files=()
   if (( ${#files[@]} )); then
     awk '
@@ -558,7 +558,7 @@ find_domain_file() {
   # keyword → slug form for exact/prefix comparison (case-insensitive)
   local kslug
   kslug=$(printf '%s' "$kw" | tr '[:upper:]' '[:lower:]')
-  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md; do
     [[ -e "$f" ]] || continue
     local base id slug slug_lower
     base=$(basename "$f" .md)
@@ -1253,7 +1253,7 @@ _cmd_doctor_check() {
   local files_checked=0
 
   # Scan all fix files
-  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md; do
     [[ -e "$f" ]] || continue
     files_checked=$((files_checked+1))
 
@@ -1486,7 +1486,7 @@ _cmd_doctor_fix() {
   local fixed_wrapped=0 fixed_mismatch=0 fixed_tags=0 repair_errors=0 repaired_files=()
 
   # Scan all fix files
-  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+  for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md; do
     [[ -e "$f" ]] || continue
 
     local base id
@@ -1621,7 +1621,7 @@ cmd_audit() {
   if [[ "$key" == "--json" ]]; then json_flag="--json"; shift; key="${1:-}"; fi
   if [[ "$key" == "--all" || -z "$key" ]]; then
     local f any_bad=0 line rc out
-    for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]-*.md; do
+    for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md; do
       [[ -e "$f" ]] || continue
       out=$(python3 "$FX_DIR/fxmeta.py" audit "$f" --json 2>/dev/null)
       rc=$?
@@ -1726,7 +1726,7 @@ cmd_status_lint() {
   local dir="${FIXINDEX_DIR:-${FIXDIR:-$PWD/fixes}}"
   [[ -d "$dir" ]] || { echo "fixindex status lint: FIXINDEX_DIR 不存在: $dir"; return 1; }
   local f status supersedes superseded_by bad=0
-  for f in "$dir"/[0-9][0-9][0-9][0-9]-*.md "$dir"/[0-9][0-9][0-9][0-9].md; do
+  for f in "$dir"/[0-9][0-9][0-9][0-9]*-*.md "$dir"/[0-9][0-9][0-9][0-9].md; do
     [[ -f "$f" ]] || continue
     status=$(awk '/^status:/ {sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
     supersedes=$(awk '/^supersedes:/ {sub(/^supersedes:[[:space:]]*/,""); print; exit}' "$f")
