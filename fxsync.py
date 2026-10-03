@@ -352,7 +352,8 @@ def _spawnable(cmd):
     except OSError:
         return cmd
     bash = shutil.which('bash')
-    return [bash, *cmd] if bash else cmd
+    # 反斜線路徑進 bash 後 dirname 取不到目錄（FX_DIR 錯位、找不到 fxauto.py）
+    return [bash, cmd[0].replace('\\', '/'), *cmd[1:]] if bash else cmd
 
 
 def hold(fixdir, cmd):
