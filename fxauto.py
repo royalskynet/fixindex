@@ -93,11 +93,15 @@ def _intake_gate(rule):
 
 def _scan_next_id():
     """純掃描：取現有最大 ID + 1（不鎖，呼叫端須已持有 id_lock）。"""
-    files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
-    if not files:
+    used = {int(m.group(1)) for f in _glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md'))
+            if (m := re.match(r'(\d{4})-', os.path.basename(f)))}
+    if not used:
         return '0001'
-    last = os.path.basename(files[-1])[:4]
-    return f'{int(last) + 1:04d}'
+    if max(used) < 9999:
+        return f'{max(used) + 1:04d}'
+    # ponytail: ID 寫死 4 位數（[:4]／\d{4} 散在 15+ 處），9999 滿了改從 1000 起補空號；
+    # 1000–9998 也補滿才需要改成 5 位數。
+    return f'{min(set(range(1000, 10000)) - used):04d}'
 
 
 ID_LOCK_TIMEOUT = float(os.environ.get('FIXINDEX_ID_LOCK_TIMEOUT', '5'))
