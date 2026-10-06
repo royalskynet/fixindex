@@ -375,7 +375,7 @@ def _word_tokens(text):
             if len(t.strip()) >= 3]
 
 
-def find_domain_file_auto(title, symps, etype='defect'):
+def find_domain_file_auto(title, symps, etype='defect', slug=None):
     """Graded domain match for the no-arg `fi` pipeline (B1: refuse-to-guess).
 
     Candidate keywords = tokens drawn from the title + first symptom. A file
@@ -383,7 +383,20 @@ def find_domain_file_auto(title, symps, etype='defect'):
     dash-prefix of the other. Only exact/prefix matches are used — substring
     matches are treated as ambiguous and a fresh file is created instead of
     polluting an existing one.
+
+    slug（明示 `SLUG:`）＝呼叫端已決定落點：只認 slug 完全相同的既有檔，不做
+    字面 token 猜測。10139：title 的 `llama-server` 切出 `server`，dash-prefix
+    命中 0314-server-parser-syntax，明示的新 SLUG 反而被 append 進舊檔。
     """
+    if slug:
+        # 原樣比對優先：slugify 會把單詞補成 `hermes-note`，但 `SLUG: hermes` 指的是 0001-hermes 桶
+        for s in dict.fromkeys([str(slug).strip().lower(), slugify(slug, fallback='fix')]):
+            for fp in sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*-' + _glob.escape(s) + '.md'))):
+                with open(fp, encoding='utf-8') as f:
+                    fm, _ = fxmeta.parse_frontmatter_full(f.read())
+                if str(fm.get('type') or 'defect') == etype:
+                    return fp
+        return None
     title_toks = set(_word_tokens(title))
     cand = list(dict.fromkeys(_word_tokens(title) + (_word_tokens(symps[0]) if symps else [])))
     if not cand:
@@ -1111,7 +1124,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
             payload.update(_git_commit_push(paths))
         return payload, paths
 
-    match = find_domain_file_auto(title, symps, etype='insight')
+    match = find_domain_file_auto(title, symps, etype='insight', slug=ini.get('slug'))
     if match:
         snap, secn = _append_to_file_insight(match, title, context, insight, impl,
                                              revisit, queries, detail)
@@ -1223,7 +1236,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         return payload, paths
     else:
         # 無重複 → 先試 domain append（分級匹配，拒猜；不中才建新檔）
-        match = find_domain_file_auto(title, symps)
+        match = find_domain_file_auto(title, symps, slug=fields.get('slug'))
         if match:
             entry_meta = {'evidence': evidence} if (evidence and verify.strip()) else {}
             snap, sec = _append_to_file(match, title, symps, root, fix, verify, detail,
@@ -1323,6 +1336,10 @@ def main():
     detail_lines = []
     insight_fields = {}
     stdin_text = sys.stdin.read() if not sys.stdin.isatty() else ''
+    # SLUG: 歸屬它所在的段落（10138：混合 pipe 只有一行 SLUG，defect 與 insight
+    # 兩筆共用同一 slug）。insight 鍵出現前的 SLUG 歸 defect，之後歸 insight；
+    # 單一型 pipe 在分流時再把另一段的 SLUG 接過來。
+    in_insight = False
     for raw in stdin_text.splitlines():
         st = raw.strip()
         m = re.match(r'^([A-Z][A-Z-]*):\s*(.+)', st)
@@ -1332,14 +1349,14 @@ def main():
             if k in ('symptom', 'root', 'fix', 'verify', 'evidence'):
                 fields.setdefault(k, v)
             elif k in ('context', 'insight', 'implication', 'revisit-when'):
+                in_insight = True
                 # 同一 pipe 多行 INSIGHT: 要累加；原本覆寫只留最後一條（10084／10085 掉了第一條）
                 insight_fields[k] = insight_fields[k] + '\n\n' + v if k in insight_fields else v
             elif k in ('queries', 'type'):
+                in_insight = True
                 insight_fields[k] = v
             elif k == 'slug':
-                # SLUG: 呼叫端自己命名 — defect 與 insight 共用
-                fields['slug'] = v
-                insight_fields['slug'] = v
+                (insight_fields if in_insight else fields)['slug'] = v
             elif k == 'rule':
                 # RULE: 泛化規則 — defect 與 insight 共用
                 fields['rule'] = v
@@ -1373,6 +1390,8 @@ def main():
             sys.exit(1)
         return
     elif has_insight_key:
+        if 'slug' in fields:
+            insight_fields.setdefault('slug', fields['slug'])
         payload, _ = _pipeline_insight(insight_fields, detail, mode, tags_arg)
         if mode == '--commit':
             _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
@@ -1407,6 +1426,8 @@ def main():
         )
         sys.exit(1)
 
+    if 'slug' in insight_fields:
+        fields.setdefault('slug', insight_fields['slug'])
     payload, _ = _pipeline_defect(fields, detail, mode, tags_arg, title_override)
     if mode == '--commit':
         _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
