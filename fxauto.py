@@ -493,7 +493,10 @@ def _derive_title(text, limit=60):
     # 路徑、IP、版號、檔名的點上——實測產出「判定本地服務（127.0.0」這種標題。
     # 全形 。．！？ 不會出現在識別碼裡，維持無條件強切。
     cuts_strong = '。．！!？?'
-    cuts_weak = '；;，,、（(【—'
+    # 全形冒號放次級：「…的正規做法：細節」切在冒號前正好是主旨。半形 `:` 不收（URL／`key: v`）。
+    # 開括號放最末級：切在「X（」只剩主詞，10084／10085 的爛標題就是這樣來的。
+    cuts_weak = '；;，,、：—'
+    cuts_bracket = '（(【'
 
     def _is_strong(i):
         c = text[i]
@@ -510,13 +513,17 @@ def _derive_title(text, limit=60):
             best = i
             break
     # 第二輪：次級斷句符（僅當第一輪沒找到）
-    if best < 0:
+    for cuts in (cuts_weak, cuts_bracket):
+        if best >= 0:
+            break
         for i in range(limit - 1, -1, -1):
-            if text[i] in cuts_weak:
-                best = i
+            if text[i] in cuts:
+                # 開括號切點太前面（不到一半）＝只剩主詞，寧可硬切保住語意
+                if cuts is cuts_weak or i >= limit // 2:
+                    best = i
                 break
     if best >= 0:
-        cut = text[:best + 1].rstrip('；;，,、（(【—-–—。．.！!？? ')
+        cut = text[:best + 1].rstrip('；;，,、：（(【—-–—。．.！!？? ')
         # 有丟東西就補 … —— 邊界切以前不補，截斷標題因此無指紋可辨（見上方 docstring）
         return cut if cut == text else cut + '…'
     # 無邊界 → 硬切補 …
@@ -1056,7 +1063,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
     回傳 (payload, touched_paths)。defer_commit=False 時各分支結尾自行
     payload.update(_git_commit_push(paths))——單一 commit，行為與 inline 版位元一致。
     """
-    title = _derive_title(ini.get('insight') or ini.get('context') or 'untitled')
+    title = _derive_title((ini.get('insight') or ini.get('context') or 'untitled').split('\n\n')[0])
     if not title.strip():
         print('INSIGHT or CONTEXT required for insight mode (provide CONTEXT: / INSIGHT:)',
               file=sys.stderr)
@@ -1067,7 +1074,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
     revisit = ini.get('revisit-when', '')
     queries = [q.strip() for q in re.split(r'[,，]', ini.get('queries', '')) if q.strip()]
     if not queries:
-        queries = [insight.strip()] if insight.strip() else []
+        queries = [q.strip() for q in insight.split('\n\n') if q.strip()]
     tags = []
     if tags_arg:
         tags = [t.strip() for t in re.split(r'[,，\s]+', tags_arg) if t.strip()]
@@ -1324,7 +1331,10 @@ def main():
             v = m.group(2).strip()
             if k in ('symptom', 'root', 'fix', 'verify', 'evidence'):
                 fields.setdefault(k, v)
-            elif k in ('context', 'insight', 'implication', 'revisit-when', 'queries', 'type'):
+            elif k in ('context', 'insight', 'implication', 'revisit-when'):
+                # 同一 pipe 多行 INSIGHT: 要累加；原本覆寫只留最後一條（10084／10085 掉了第一條）
+                insight_fields[k] = insight_fields[k] + '\n\n' + v if k in insight_fields else v
+            elif k in ('queries', 'type'):
                 insight_fields[k] = v
             elif k == 'slug':
                 # SLUG: 呼叫端自己命名 — defect 與 insight 共用
