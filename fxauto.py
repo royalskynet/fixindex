@@ -1291,6 +1291,20 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         return payload, paths
 
 
+# stdin parser 明確處理的 KEY。自由文字容錯（無 SYMPTOM 時撿首行）必須跳過全部
+# 這些行，否則指令欄位會被當成症狀內容：`EVIDENCE: log` 既解析成 Evidence 又被
+# 撿成 symptom，KEY 前綴跟著進 title／slug／frontmatter，再補上 untraced／applied
+# 填充值（10194 的垃圾 §5）。兩處共用這一份，加新 KEY 只改這裡。
+# 未列於此的 KEY 行（如 `NOTE:`）照舊落入 detail_lines 當自由文字，可當 symptom。
+RECOGNISED_KEYS = frozenset((
+    'symptom', 'root', 'fix', 'verify', 'evidence',          # defect 欄位
+    'context', 'insight', 'implication', 'revisit-when',     # insight 欄位
+    'queries', 'type',                                       # insight 中介資料
+    'slug', 'rule',                                          # 兩者共用
+))
+KEY_LINE_RE = re.compile(r'^([A-Z][A-Z-]*):')
+
+
 def main():
     args = sys.argv[1:]
     plerr = _pull_first_if_repo()
@@ -1362,6 +1376,9 @@ def main():
                 fields['rule'] = v
                 insight_fields['rule'] = v
             else:
+                # 未識別的 KEY 行當自由文字。這裡的分支集合必須與
+                # RECOGNISED_KEYS 一致，否則自由文字容錯會撿到指令欄位。
+                assert k not in RECOGNISED_KEYS, f'RECOGNISED_KEYS 漏了 {k}'
                 detail_lines.append(raw)
         elif re.match(r'^[A-Z][A-Z-]*:\s*$', st):
             # 裸 KEY 標籤、無值（如空模板 `SYMPTOM:`/`ROOT:`/`FIX:`/`VERIFY:`）——
@@ -1408,7 +1425,8 @@ def main():
             st = raw.strip()
             if not st:
                 continue
-            if re.match(r'^[A-Z]+\s*:', st) and st.split(':', 1)[0].lower() in ('symptom', 'root', 'fix', 'verify'):
+            km = KEY_LINE_RE.match(st)
+            if km and km.group(1).lower() in RECOGNISED_KEYS:
                 continue
             fields.setdefault('symptom', st)
             break
