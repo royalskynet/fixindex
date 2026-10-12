@@ -9,6 +9,18 @@
 
 ---
 
+## 快速安裝
+
+一行安裝：把 CLI symlink 進 `~/.local/bin`，並把 `commands/*.md`（`/fi` 斜線指令）link 進 Claude Code config 目錄。
+
+```bash
+git clone https://github.com/royalskynet/fixindex.git && cd fixindex && ./install.sh
+```
+
+前置需求：`bash` 4+ 與 `ripgrep`（macOS 用 `brew install ripgrep`，其他平台用套件管理器）。`install.sh` 會把 `~/.local/bin` 加進 PATH 的提示印出來 —— 記得照做。
+
+---
+
 ## 這套系統在做什麼
 
 `fixindex` 是一份**技術經驗索引**，不是任務日誌。它的目地是讓「往後編程越來越少彎路」：
@@ -26,8 +38,8 @@
 ### 1. 取得 repo
 
 ```bash
-git clone https://github.com/royalskynet/fixindex.git ~/dev/fixindex
-cd ~/dev/fixindex
+git clone https://github.com/royalskynet/fixindex.git ~/src/fixindex
+cd ~/src/fixindex
 ```
 
 ### 2. 安裝 CLI 與 `/fi` 斜線指令
@@ -43,7 +55,7 @@ bash install.sh      # CLI → ~/.local/bin/fixindex；commands/*.md（/fi）→
 ```bash
 ln -s "$PWD/fixindex" ~/.local/bin/fixindex      # 最常見：symlink
 # 或直接把 repo 加進 PATH：
-echo 'export PATH="$HOME/dev/fixindex:$PATH"' >> ~/.zshrc
+echo 'export PATH="$HOME/src/fixindex:$PATH"' >> ~/.zshrc
 ```
 
 > **`~/.local/bin` 已在 PATH？** 先確認：`echo "$PATH" | tr ':' '\n' | grep local/bin`。沒有的話先把 `~/.local/bin` 加進 PATH。

@@ -2,7 +2,7 @@
 
 > Featherweight, file-only personal bug runbook — symptom → fix lookup in one command, inspired by `adr-tools`.
 
-[中文說明](./README.md)
+[繁體中文說明](./README.md) · English
 
 `fixindex` is ~150 lines of `bash` + `ripgrep`. No database, no daemon, no editor plugin. Every bug you've solved lands in a Markdown file `fixes/NNNN-<slug>.md`. Next time the same error message appears, `fixindex find "<error>"` jumps straight to the fix you wrote last quarter.
 
@@ -11,25 +11,63 @@ Why it exists:
 - Most "second brain" tools are too heavy. You want one command, answer straight to stdout.
 - LLM coding agents (Claude Code, Codex…) re-explore bugs you've already solved, burning tokens. Point them at `fixindex find` before they start digging — saves hours of repeated debugging.
 
-## Install
+## Quick install
+
+One line. It symlinks the CLI into `~/.local/bin` and links `commands/*.md` (the `/fi` slash command) into your Claude Code config dir:
 
 ```bash
-# 1. clone or embed into your personal notes repo
-git clone https://github.com/royalskynet/fixindex.git ~/dev/fixindex
-cd ~/dev/fixindex
-
-# 2. put the CLI on PATH
-ln -s "$PWD/fixindex" ~/.local/bin/fixindex
-# or: echo 'export PATH="$HOME/dev/fixindex:$PATH"' >> ~/.zshrc
-
-# 3. point at your runbook (skip if using this repo directly)
-export FIXINDEX_DIR="$HOME/notes/runbook/fixes"
-export FIXINDEX_INDEX="$HOME/notes/runbook/FIX-INDEX.md"
+git clone https://github.com/royalskynet/fixindex.git && cd fixindex && ./install.sh
 ```
 
-Requirements: `bash` 4+, `ripgrep` (`brew install ripgrep`), `awk`, `find`. macOS and Linux.
-No Node, no database, no daemon. Python 3 (stdlib only) backs `fixindex find`; everything
-else is shell. The optional hybrid semantic layer is the one thing that wants a pip
+Needs `bash` 4+ and `ripgrep` (`brew install ripgrep` on macOS, your distro's package manager elsewhere). `install.sh` prints the `PATH` line to add afterwards — apply that yourself.
+
+## Install step by step
+
+```bash
+# 1. clone
+git clone https://github.com/royalskynet/fixindex.git ~/src/fixindex
+cd ~/src/fixindex
+
+# 2. CLI -> ~/.local/bin/fixindex, commands/*.md (/fi) -> ${CLAUDE_CONFIG_DIR:-~/.claude}/commands
+bash install.sh
+
+# 2b. isolated Claude config (e.g. CLAUDE_CONFIG_DIR=~/.deepclaude/config)
+FIXINDEX_CLAUDE_DIRS=~/.deepclaude/config bash install.sh
+
+# or by hand (CLI only — you still have to link commands/fi.md yourself)
+ln -s "$PWD/fixindex" ~/.local/bin/fixindex
+# or: echo 'export PATH="$HOME/src/fixindex:$PATH"' >> ~/.zshrc
+
+# 3. point at your own runbook (skip if you use this repo's fixes/)
+export FIXINDEX_DIR="$HOME/notes/runbook/fixes"
+export FIXINDEX_INDEX="$HOME/notes/runbook/FIX-INDEX.md"
+
+# 4. verify
+fixindex help | head
+fixindex find "postgres"    # empty is fine: the search pipeline works, your runbook is just empty
+```
+
+> **The CLI alone is not a full install.** `/fi` is `commands/fi.md`; without it linked into the Claude Code config dir the slash command simply does not exist on a fresh machine. `fixindex status` warns about a missing `/fi` in its section ④.
+
+> **Is `~/.local/bin` on your PATH?** Check with `echo "$PATH" | tr ':' '\n' | grep local/bin`; add it to your shell profile if it isn't.
+
+### Set `FIXINDEX_DIR` in all three environments
+
+Your fix files live in **your own private checkout**, not in this public repo, so the location comes from an env var — and it has to be set in all three places, or entries you wrote will look like they vanished:
+
+| Environment | Where to set it | Why |
+|---|---|---|
+| Interactive shell (bash/zsh/fish) | `~/.bashrc`, `~/.zshrc`, … | Used when you type `fixindex` by hand |
+| Login shell | `~/.zshenv` / `~/.bash_profile` | Some agent gateways start from a login shell |
+| **Agent / daemon** | **the agent's own config** or that daemon's env | Background services usually don't read your rc files — the most common cause of "my notes disappeared" |
+
+**If you skip it:** the CLI and the Python tools fall back to `./fixes/` in the current working directory, or to the `fixes/` inside this repo. Running `fixindex new` from the wrong directory silently creates an entry in a second runbook nobody will search.
+
+### Requirements
+
+`bash` 4+, `ripgrep` (`brew install ripgrep`), `awk`, `find`. macOS and Linux.
+No Node, no database, no daemon. Python 3 (stdlib only) backs the semantic tools; the CLI
+itself is pure shell. The optional hybrid semantic layer is the one thing that wants a pip
 install — see [Retrieval: two modes](#retrieval-two-modes).
 
 ## Workflow
@@ -124,20 +162,39 @@ The test is mechanical: **if you can't write a `Symptom` someone would plausibly
 
 | Command | What it does |
 |---------|-------------|
-| `fixindex find <kw>` | Match against frontmatter `symptoms:` entries. First stop. |
+| `fixindex find <kw>` | Match against frontmatter `symptoms:` entries (BM25). First stop. |
 | `fixindex grep <kw>` | Full-text ripgrep across all fix files. Use when `find` misses. |
 | `fixindex show <id>` | `cat fixes/NNNN-*.md`. |
 | `fixindex list` | One-line summary per fix file. |
 | `fixindex new <slug>` | Assign next ID, scaffold file, refresh index table. |
+| `fixindex doctor [--fix]` | Diagnose and repair corrupted frontmatter (wrapped frontmatter, filename/id mismatch; `--fix` auto-repairs the first two). |
 | `fixindex re-index` | Regenerate the `<!-- fixindex:table -->` block in `FIX-INDEX.md`. Idempotent. |
 | `fixindex supersede <old> <new>` | Mark `<old>` superseded by `<new>`, keep file. |
+| `fixindex status` | Three-part health check: ① index freshness ② git sync ③ superseded lint. `--json`, and `--assert-clean` (exit 1 on errors or a pending push — for Stop hooks / CI). |
 | `fixindex insights [<topic>]` | Matching `type: insight` entries only (no arg = list all). |
+| `fixindex externals [topic]` | Matching `type: external` entries only (no arg = list all) — external intel not verified on this machine. |
+| `fixindex mark <ID#N> <state>` | Section trust state `verified\|stale\|blocked\|superseded\|unverified`, with `--evidence`/`--date`/`--reason`. |
+| `fixindex outcome <ID#N> <helpful\|irrelevant\|failed>` | Anonymous outcome counter (v1 only displays, never re-scores). |
 | `fixindex rule <ID[#N]> "<text>"` | Backfill a generalized Rule onto an existing entry (defaults #1; refuses to overwrite an existing Rule). |
+| `fixindex audit [ID#N\|ID\|--all] [--json]` | Section-trust check; exit 0 = clean, 1 = quality, 2 = usage. |
 | `fixindex prune [--json]` | Read-only "forgetting candidates": no `**Rule:**` + single § + `active` (deletes nothing). |
 | `fixindex fi` | Append one entry from stdin: dedup/supersede → domain match → re-index → commit. |
+| `fixindex auto` | Alias for `fixindex fi` with no arguments. |
 | `fixindex help` | Show usage. |
 
-Env vars: `FIXINDEX_DIR`, `FIXINDEX_INDEX`, `RG`.
+Env vars: `FIXINDEX_DIR`, `FIXINDEX_INDEX`, `RG`, `FIXINDEX_NO_SYNC` (`1` disables the git autosync), `FIXINDEX_SEMANTIC` (`0` forces pure BM25), `FIXINDEX_SEMANTIC_MODEL`.
+
+### Git autosync
+
+Write commands (`new` / `fi` / `auto` / `re-index` / `supersede` / `doctor --fix`) are atomic: **git pull first, commit + push at the end**. Writing an entry pushes it to the remote immediately, so a bad run is always recoverable. All of the git logic lives in `fxsync.py`; the bash CLI and the Python tools call into it rather than shelling out to git themselves.
+
+- **Paths-scoped commit** — only the files this command wrote are staged, never `add -A`, so concurrent work doesn't drag half-finished changes along.
+- **Offline is graded, not silent and not hung** — on a network failure the local commit is kept, a `pending-push` marker is written, a WARNING is printed and the exit code stays 0. `conflict` / `fatal` fail loudly with git's own stderr. `fixindex status` reports `pending_push` until the next write command flushes it; escape hatch `python3 fxsync.py flush`.
+- **Escape hatches** — `--no-sync` or `FIXINDEX_NO_SYNC=1`, stripped from the arg list at any position and exported to the whole process tree.
+
+## Isolate your tests before you run any
+
+Tests must not write into your real runbook. `export FIXINDEX_STRICT_DIR=1` makes every write refuse to fall back to a default location when `FIXINDEX_DIR` isn't set, and `FIXINDEX_TEST=1` additionally makes a run fatal if the target remote matches `FIXINDEX_PROTECTED_REMOTES` (default `royalskynet/fixindex-log`). Set both env vars, point `FIXINDEX_DIR`/`FIXINDEX_INDEX` at a sandbox, and you're covered even if the path arithmetic is wrong.
 
 ## Retrieval: two modes
 
@@ -258,7 +315,13 @@ still works for pinning an entry to a specific domain.
 
 ## Using with LLM coding agents
 
-**One-command snippets for all platforms** in [`agent-snippets/`](./agent-snippets/) — pick your tool (Claude / Codex / Cursor / Gemini / opencode / generic), `cat … >> <rules-file>` to install.
+**One-command snippets for all platforms** in [`agent-snippets/`](./agent-snippets/) — pick your tool and append (don't replace) it to that tool's global instructions file:
+
+```bash
+cat agent-snippets/claude.md >> ~/.claude/CLAUDE.md      # Claude Code
+cat agent-snippets/codex.md   >> ~/.config/codex/AGENTS.md # Codex
+cat agent-snippets/generic.md >> <your agent rules file>  # anything else
+```
 
 Full natural-language dispatch table (with examples and rationale) in [`docs/agent-integration.md`](./docs/agent-integration.md).
 
