@@ -1228,7 +1228,7 @@ Usage:
 Checks:
   1. Wrapped frontmatter (memory-node schema with metadata: block)
   2. ID mismatch (filename vs frontmatter id:)
-  3. Duplicate IDs (multiple files with same 4-digit prefix)
+  3. Duplicate IDs (multiple files with same numeric id prefix)
   4. Stub entries (empty or TODO title)
   5. Filenames with spaces
   6. Missing sections (non-stub without any ## §N headings)
@@ -1325,7 +1325,8 @@ _cmd_doctor_check() {
 
   # Check 3: duplicate IDs
   local dup_ids=""
-  dup_ids=$(ls "$FIXDIR"/*.md 2>/dev/null | xargs -n1 basename | grep -oE '^[0-9]{4}' | sort | uniq -d)
+  # 取完整數字 ID：只取前 4 碼時 10000 起與 1000 撞，誤報 11 筆（2026-10-20）
+  dup_ids=$(ls "$FIXDIR"/*.md 2>/dev/null | xargs -n1 basename | grep -oE '^[0-9]+' | sort | uniq -d)
   local dup_list=()
   if [[ -n "$dup_ids" ]]; then
     while IFS= read -r dup_id; do
