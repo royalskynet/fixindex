@@ -15,7 +15,7 @@ INPUT="$(cat)"
 export INPUT
 
 python3 - <<'PYEOF'
-import os, json, subprocess, re, sys
+import os, json, subprocess, re, sys, time
 
 try:
     d = json.loads(os.environ['INPUT'] or '')
@@ -113,8 +113,20 @@ def remind(reason):
 
 
 def stop_block(reason):
-    # E2（Astra 審查 2026-09-14）：疑似修過 defect 未記 → 一次性 block，強制直接跑 /fi。
-    # stop_hook_active=true 時頂端守衛已靜默放行，故不會每輪重複擋。
+    # E2（Astra 審查 2026-09-14）原本一次性 block 強制跑 /fi。
+    # 2026-10-22 使用者定「Stop 不停、使用者無感」：改寫 sidecar，~/.claude/hooks/deferred-notes.sh
+    # 在下一則使用者訊息時交給模型；沒有 session_id（非 Claude Code）才退回 block。
+    sid = re.sub(r'[^A-Za-z0-9_-]', '', str(d.get('session_id') or ''))
+    root = os.environ.get('CLAUDE_DEFERRED_DIR') or os.path.expanduser('~/.cache/claude-deferred')
+    if sid:
+        try:
+            os.makedirs(os.path.join(root, sid), exist_ok=True)
+            with open(os.path.join(root, sid, 'fi-%d.txt' % int(time.time() * 1000)), 'w', encoding='utf-8') as fh:
+                fh.write('[fi-reminder] ' + reason + '\n')
+            print(json.dumps({"continue": True, "suppressOutput": True}))
+            sys.exit(0)
+        except OSError:
+            pass
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     sys.exit(0)
 
