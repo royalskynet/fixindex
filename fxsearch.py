@@ -168,6 +168,29 @@ class BM25Engine:
 SEMANTIC_MODEL = os.environ.get('FIXINDEX_SEMANTIC_MODEL',
                                 'minishlab/potion-multilingual-128M')
 _SEM_CACHE = None
+_SLOT_FD = None
+CACHE_DIR = os.environ.get('FIXINDEX_CACHE_DIR',
+                           os.path.expanduser('~/.cache/fixindex'))
+
+
+def _take_slot():
+    """全機同時最多 N 支語意查詢（每支峰值 ~2GB）；搶不到就退回 BM25。
+
+    2026-10-22 整機當機：子代理併發跑 fixindex，每支 2GB，swap 衝到 27GB。
+    flock 在行程結束時自動釋放，不會留死鎖。"""
+    global _SLOT_FD
+    import fcntl
+    slots = int(os.environ.get('FIXINDEX_SEM_SLOTS', '2'))
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    for i in range(slots):
+        fd = os.open(os.path.join(CACHE_DIR, f'sem-slot-{i}'), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _SLOT_FD = fd
+            return True
+        except OSError:
+            os.close(fd)
+    return False
 
 
 def _semantic_layer():
@@ -176,6 +199,9 @@ def _semantic_layer():
     if _SEM_CACHE is not None:
         return _SEM_CACHE or None
     if os.environ.get('FIXINDEX_SEMANTIC') == '0':
+        _SEM_CACHE = False
+        return None
+    if not _take_slot():
         _SEM_CACHE = False
         return None
     try:
@@ -202,6 +228,32 @@ def _normalize(pairs):
     return {i: s / top for i, s in pairs}
 
 
+def _entry_matrix(model, np, raws):
+    """條目向量存磁碟，內容沒變就不重算（重算全部條目是記憶體峰值的大頭）。"""
+    import hashlib
+    key = hashlib.sha1((SEMANTIC_MODEL + '\0' + '\0'.join(raws)).encode()).hexdigest()
+    path = os.path.join(CACHE_DIR, 'emb-' + re.sub(r'\W', '_', SEMANTIC_MODEL) + '.npz')
+    try:
+        with np.load(path) as z:
+            if str(z['key']) == key:
+                return z['mat']
+    except Exception:
+        pass
+    mat = model.encode(raws, show_progress_bar=False)
+    # 空 section 會編出零向量。除以 (norm + eps) 不夠 —— 那是 0/1e-9，
+    # 後續 matmul 仍會踩到 divide-by-zero / overflow。零向量要原樣留著。
+    norms = np.linalg.norm(mat, axis=1, keepdims=True)
+    mat = (mat / np.where(norms < 1e-9, 1.0, norms)).astype(np.float32)
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = path + f'.{os.getpid()}.tmp.npz'
+        np.savez(tmp, key=np.array(key), mat=mat)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return mat
+
+
 def search_hybrid(engine, entries, query, limit=8):
     """BM25 ∪ 語意，各自正規化後等權相加。語意層缺席時等同 bm.search()。"""
     lexical = engine.search(query, limit=limit)
@@ -210,11 +262,7 @@ def search_hybrid(engine, entries, query, limit=8):
         return lexical
     model, np = sem
     try:
-        mat = model.encode([e['raw'] for e in entries], show_progress_bar=False)
-        # 空 section 會編出零向量。除以 (norm + eps) 不夠 —— 那是 0/1e-9，
-        # 後續 matmul 仍會踩到 divide-by-zero / overflow。零向量要原樣留著。
-        norms = np.linalg.norm(mat, axis=1, keepdims=True)
-        mat = mat / np.where(norms < 1e-9, 1.0, norms)
+        mat = _entry_matrix(model, np, [e['raw'] for e in entries])
         vec = model.encode([query])[0]
         qn = np.linalg.norm(vec)
         vec = vec / (qn if qn >= 1e-9 else 1.0)
