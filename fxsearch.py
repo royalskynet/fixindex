@@ -179,13 +179,18 @@ def _take_slot():
     2026-10-22 整機當機：子代理併發跑 fixindex，每支 2GB，swap 衝到 27GB。
     flock 在行程結束時自動釋放，不會留死鎖。"""
     global _SLOT_FD
-    import fcntl
+    try:
+        import fcntl
+        lock = lambda fd: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except ImportError:  # Windows 沒有 fcntl；msvcrt 鎖同樣在行程結束時釋放
+        import msvcrt
+        lock = lambda fd: msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
     slots = int(os.environ.get('FIXINDEX_SEM_SLOTS', '2'))
     os.makedirs(CACHE_DIR, exist_ok=True)
     for i in range(slots):
         fd = os.open(os.path.join(CACHE_DIR, f'sem-slot-{i}'), os.O_CREAT | os.O_RDWR, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock(fd)
             _SLOT_FD = fd
             return True
         except OSError:
