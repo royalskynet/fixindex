@@ -15,7 +15,7 @@ import fxsearch
 def test_slots_full_falls_back():
     # 用 _take_slot 本身佔滿名額：fcntl（POSIX）與 msvcrt（Windows）都測得到
     holder = ("import sys,time; sys.path.insert(0,sys.argv[1]); import fxsearch\n"
-              "held=[fxsearch._take_slot() for _ in range(2)]; fds=[]\n"
+              "held=[fxsearch._take_slot() for _ in range(2)]\n"
               "print('held' if all(held) else 'miss',flush=True); time.sleep(30)\n")
     p = subprocess.Popen([sys.executable, '-c', holder, os.path.dirname(os.path.abspath(__file__))],
                          stdout=subprocess.PIPE, text=True)
