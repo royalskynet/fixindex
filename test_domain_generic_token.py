@@ -27,8 +27,8 @@ def test_no_append_to_bare_admin_bucket():
     old = fxauto.FIXINDEX_DIR
     fxauto.FIXINDEX_DIR = tmp
     try:
-        symp = "純讀檔的 Bash 指令被 LSP-FIRST hook 擋下"
-        m = fxauto.find_domain_file_auto(fxauto._derive_title(symp), [symp])
+        symp = "Bash hook blocks a pure read: Bash"
+        m = fxauto.find_domain_file_auto(symp, [symp])
         assert m is None, m
     finally:
         fxauto.FIXINDEX_DIR = old
