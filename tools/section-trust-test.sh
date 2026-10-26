@@ -237,6 +237,12 @@ GIT_AFTER=$(git -C "$REPO" status --porcelain | sort)
 [ "$GIT_BEFORE" = "$GIT_AFTER" ] && ok "C10 public repo unchanged" || ng "C10 public repo changed: diff=$GIT_BEFORE|$GIT_AFTER"
 rm -rf "$SD"
 
+# ---------- C11: fixindex mark 參數錯誤要印出 fxmeta 錯誤（set -e 曾吞掉，只剩 rc=2）----------
+SD=$(newlib); write_legacy "$SD"
+OUT=$(FIXINDEX_NO_SYNC=1 FIXINDEX_STRICT_DIR=1 FIXINDEX_TEST=1 FIXINDEX_DIR="$SD/fixes" bash "$FIXINDEX_BIN" mark "0553#1" stale --evidence x 2>&1); RC=$?
+[ "$RC" -ne 0 ] && echo "$OUT" | grep -q 'requires --reason' && ok "C11 mark error surfaced" || ng "C11 mark error surfaced (rc=$RC out=$OUT)"
+rm -rf "$SD"
+
 echo ""
 if [ "$FAIL_CT" -eq 0 ]; then echo "ALL PASS ($PASS_CT checks, 0 fail)"; exit 0
 else echo "FAILURE ($PASS_CT pass, $FAIL_CT fail)"; exit 1; fi

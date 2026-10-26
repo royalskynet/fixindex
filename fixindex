@@ -1578,9 +1578,9 @@ cmd_mark() {
   fpath=$(resolve_id "$id") || true
   [[ -n "$fpath" ]] || die "no fix with id $id (key: $key)"
   local fxmeta_py="$FX_DIR/fxmeta.py"
-  local out rc
-  out=$(FIXINDEX_DIR="$FIXDIR" python3 "$fxmeta_py" mark "$fpath" "$key" "$state" "${@:3}" 2>&1)
-  rc=$?
+  local out="" rc=0
+  # set -e 下裸 out=$(…) 失敗即退出、錯誤被吞（同 cmd_rule）
+  out=$(FIXINDEX_DIR="$FIXDIR" python3 "$fxmeta_py" mark "$fpath" "$key" "$state" "${@:3}" 2>&1) || rc=$?
   echo "$out"
   [[ $rc -eq 0 ]] || die "$out"
   sync_push "$fpath"
@@ -1591,9 +1591,8 @@ cmd_outcome() {
   local key="$1" which="$2" id
   id=$(echo "$key" | cut -d# -f1)
   local f; f=$(resolve_id "$id") || die "no fix with id $id"
-  local out rc
-  out=$(python3 "$FX_DIR/fxmeta.py" outcome "$f" "$key" "$which" 2>&1)
-  rc=$?
+  local out="" rc=0
+  out=$(python3 "$FX_DIR/fxmeta.py" outcome "$f" "$key" "$which" 2>&1) || rc=$?
   [[ -n "$out" ]] && printf '%s\n' "$out"
   [[ $rc -eq 0 ]] || die "outcome failed"
   sync_push "$f"
