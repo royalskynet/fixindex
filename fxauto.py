@@ -1368,12 +1368,22 @@ def main():
     # 兩筆共用同一 slug）。insight 鍵出現前的 SLUG 歸 defect，之後歸 insight；
     # 單一型 pipe 在分流時再把另一段的 SLUG 接過來。
     in_insight = False
+    # 一次 pipe 只收一筆 defect：第二個 SYMPTOM／defect SLUG 原本被 setdefault／覆寫
+    # 揉成「第一筆內容＋最後一筆檔名」，其餘靜默丟失，/fi 因此反覆重記同一教訓。
+    n_symptom = n_defect_slug = n_insight_slug = 0
     for raw in stdin_text.splitlines():
         st = raw.strip()
         m = re.match(r'^([A-Z][A-Z-]*):\s*(.+)', st)
         if m:
             k = m.group(1).lower()
             v = m.group(2).strip()
+            if k == 'symptom':
+                n_symptom += 1
+            elif k == 'slug':
+                if in_insight:
+                    n_insight_slug += 1
+                else:
+                    n_defect_slug += 1
             if k in ('symptom', 'root', 'fix', 'verify', 'evidence'):
                 fields.setdefault(k, v)
             elif k in ('context', 'insight', 'implication', 'revisit-when'):
@@ -1402,6 +1412,11 @@ def main():
         elif st:
             detail_lines.append(raw)
     detail = '\n'.join(detail_lines)
+    if n_symptom > 1 or n_defect_slug > 1 or n_insight_slug > 1:
+        print(f'MULTI-ENTRY rejected: stdin 有 {n_symptom} 個 SYMPTOM／{n_defect_slug + n_insight_slug} 個 SLUG。'
+              'fixindex fi 一次只寫一筆，多筆請拆檔逐筆呼叫（for f in blk*.txt; do fixindex fi < "$f"; done）。',
+              file=sys.stderr)
+        sys.exit(2)
 
     # --- 三態分流：判定 mixed / insight-only / defect-only ---
     has_insight_key = ('insight' in insight_fields) or (insight_fields.get('type', '').strip().lower() == 'insight')
