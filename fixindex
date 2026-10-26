@@ -1561,7 +1561,12 @@ cmd_supersede() {
   rm -f "${old_f}.bak"
   # append supersedes ref to new file frontmatter if not present
   awk -v old_id="$(basename "$old_f" | cut -d- -f1)" '
-    /^supersedes:/ && !done { sub(/\[\]/, "[" old_id "]"); done=1 }
+    # 清單非空時也要追加（原本只換 []，第二筆起靜默丟失，11481 只記到 11476）
+    /^supersedes:/ && !done {
+      done=1
+      if ($0 ~ /\[\]/) sub(/\[\]/, "[" old_id "]")
+      else if ($0 !~ ("[[ ,]" old_id "[],]")) sub(/\]/, ", " old_id "]")
+    }
     { print }
   ' "$new_f" > "${new_f}.tmp" && mv "${new_f}.tmp" "$new_f"
   cmd_re_index
