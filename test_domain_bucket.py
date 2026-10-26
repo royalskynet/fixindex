@@ -22,6 +22,8 @@ def demo():
             assert f('hermes gateway 401', ['bot 沉默']) == '0001-hermes.md'
             # 多詞 slug 不受影響：symptom token 仍可 ① 精確命中
             assert f('無關標題', ['fixindex-fi-append 出錯']) == '0619-fixindex-fi-append.md'
+            # 1099: 「fixindex」是工具名非領域名，不得因此吸進任何 fixindex* 檔
+            assert f('無關標題', ['fixindex fi 多段 KEY 被併成一段']) is None
         finally:
             fxauto.FIXINDEX_DIR = old
     print('ok domain-bucket')

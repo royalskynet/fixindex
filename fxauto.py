@@ -376,7 +376,15 @@ def _word_tokens(text):
     # 1099：複合標記（pure-read、Bash）不是領域名。整份代碼庫沒有任何
     # NNNN-Bash.md，但舊規則下「Bash」可同分吸進 9907-bash.md（admin 桶，
     # 10-26 實測連兩次）；純中文 title 在 ② 之下也會因唯一命中同一個桶。
-    generic = {'bash', 'read', 'pure', 'tool', 'hook', 'file', 'test', 'error'}
+    # 1099 追加：工具名本身（fixindex、fxauto）不是領域名，但只有「純工具名」才算——
+    # 'fixindex-fi-append' 帶具體後綴，是指向領域的詞，照舊讓 ① 精確命中。
+    generic = {'bash', 'read', 'pure', 'tool', 'hook', 'file', 'test', 'error',
+               'grep', 'jq', 'git'}
+    low = text.lower()
+    for name in ('fixindex', 'fxauto'):
+        if (re.search(r'(?<![\w-])' + name + r'(?![\w-])', low)
+                or re.search(r'(?<![\w-])' + name + r'-(?!fi\b|dc\b|dcq\b|hook\b|store\b)', low)):
+            generic.add(name)
     specific = [t for t in toks if t not in generic]
     return specific or toks
 
