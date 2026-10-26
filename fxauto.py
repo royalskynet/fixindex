@@ -371,8 +371,14 @@ def _title_tokens(text):
 
 def _word_tokens(text):
     """Split into lowercase word tokens for domain matching (ignore short reads)."""
-    return [t.lower() for t in re.split(r'[\s，。,.!?、:：;；()（）\[\]\{\}"\'`~\-—/]+', text)
+    toks = [t.lower() for t in re.split(r'[\s，。,.!?、:：;；()（）\[\]\{\}"\'`~\-—/]+', text)
             if len(t.strip()) >= 3]
+    # 1099：複合標記（pure-read、Bash）不是領域名。整份代碼庫沒有任何
+    # NNNN-Bash.md，但舊規則下「Bash」可同分吸進 9907-bash.md（admin 桶，
+    # 10-26 實測連兩次）；純中文 title 在 ② 之下也會因唯一命中同一個桶。
+    generic = {'bash', 'read', 'pure', 'tool', 'hook', 'file', 'test', 'error'}
+    specific = [t for t in toks if t not in generic]
+    return specific or toks
 
 
 def find_domain_file_auto(title, symps, etype='defect', slug=None):
