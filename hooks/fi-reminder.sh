@@ -46,6 +46,7 @@ fi_called = False
 git_commit_seen = False
 fixes_edited = False
 mutated = False
+mutations = 0   # 改檔次數；defect 提醒的「已提醒」記號存這個數，之後有新改檔才再提醒
 debug_evidence = False
 tool_calls = 0
 assistant_turns = 0
@@ -85,6 +86,7 @@ try:
                             if GIT_RE.search(cmd):
                                 git_commit_seen = True
                                 mutated = True
+                                mutations += 1
                         elif b.get('name') == 'Skill':
                             inp = b.get('input')
                             if isinstance(inp, dict):
@@ -97,6 +99,7 @@ try:
                                 fixes_edited = True
                             if fp and CODE_EXT_RE.search(fp) and not NON_MUTATING_PATH_RE.search(fp):
                                 mutated = True
+                                mutations += 1
                     elif b.get('type') == 'text':
                         if DEBUG_RE.search(str(b.get('text') or '')):
                             debug_evidence = True
@@ -216,6 +219,18 @@ if tool_calls < THRESHOLD:
 # 需要「談到 defect」+「真的動過檔案」兩個證據同時成立。只有文字證據時，
 # 稽核／規劃／寫工單這類純討論輪會滿篇 fix/根因/error 而被誤擋。
 if debug_evidence and mutated and not fi_called:
+    # 每次 Stop 都重掃整份 transcript，條件一成立就永遠成立；stop_hook_active 只擋同一輪。
+    # 記下提醒當時的改檔次數，之後沒有新改檔就不再提醒（不然每則訊息都跳一次）。
+    _dmark = os.path.expanduser(f'~/.claude/guard-state/defect-reminded-{os.path.basename(tp)[:8]}')
+    try: _dlast = int(open(_dmark).read())
+    except Exception: _dlast = -1
+    if mutations <= _dlast:
+        sys.exit(0)
+    try:
+        os.makedirs(os.path.dirname(_dmark), exist_ok=True)
+        open(_dmark, 'w').write(str(mutations))
+    except OSError:
+        pass
     stop_block('本 session 疑似修過 defect 未記：直接跑 /fi（掃描去重後自動記入；無可記則一句帶過即停）')
 
 sys.exit(0)
