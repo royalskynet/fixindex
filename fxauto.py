@@ -11,7 +11,7 @@ Input: lines in KEY: value format (SYMPTOM, ROOT, FIX, VERIFY)
 """
 
 import sys, os, json, re, subprocess, glob as _glob, tempfile, datetime
-import time, unicodedata, socket
+import time, unicodedata, socket, difflib
 try:
     import fcntl
 except ImportError:  # Windows: no flock -> msvcrt byte-range lock, same non-blocking semantics
@@ -811,8 +811,84 @@ def _run_index(cmd, *args):
     return subprocess.run(launch + cmd.split(' ') + list(args), env=env)
 
 
-def _verify_written(path, snap=None):
+def _landed_missing(txt, expect):
+    """回傳 expect 裡「有值卻沒出現在檔案」的欄位名。只比對各值前 24 字（壓空白），
+    容忍排版改寫；抓的是整欄被丟（多筆揉一筆、dedup 路徑漏傳 rule 這類靜默丟失）。"""
+    flat = re.sub(r'\s+', ' ', txt)
+    miss = []
+    for k, v in (expect or {}).items():
+        v = re.sub(r'\s+', ' ', (v or '').split('\n\n')[0]).strip()
+        if k == 'symptom':
+            v = v.split(';')[0].strip()
+        if v and v[:24] not in flat:
+            miss.append(k)
+    return miss
+
+
+LOOP_WINDOW_H = 2
+
+
+def _loop_warning(probe):
+    """advisory（只警告不擋，借鏡 loopbuster 的 FuzzyRepeat）：最近 LOOP_WINDOW_H 小時
+    已寫過相近教訓、或 fix-store 有 ≥2 次 Revert → 回傳警告字串，否則 None。
+    ponytail: 只比對最近窗內條目的單行相似度 ≥0.6；誤報多再改用 embedding 或調門檻。"""
+    try:
+        probe = re.sub(r'\s+', ' ', (probe or '').split(';')[0]).strip()[:120]
+        if not probe:
+            return None
+        h = LOOP_WINDOW_H
+        top = subprocess.run(['git', '-C', FIXINDEX_DIR, 'rev-parse', '--show-toplevel'],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        if top:
+            log = subprocess.run(['git', '-C', top, 'log', f'--since={h}.hours', '--name-only',
+                                  '--format=@%s'], capture_output=True, text=True, timeout=10).stdout
+            lines = log.splitlines()
+            reverts = sum(1 for l in lines if l.startswith('@Revert'))
+            recent = {os.path.join(top, l) for l in lines if l.endswith('.md') and not l.startswith('@')}
+        else:
+            cutoff = time.time() - h * 3600
+            reverts = 0
+            recent = {q for q in _glob.glob(os.path.join(FIXINDEX_DIR, '*.md'))
+                      if os.path.getmtime(q) >= cutoff}
+        hits = []
+        for q in recent:
+            if not os.path.isfile(q):
+                continue
+            with open(q, encoding='utf-8', errors='replace') as fh:
+                cand = [l.strip()[:160] for l in fh.read().splitlines()[:60] if len(l.strip()) > 8]
+            if max((difflib.SequenceMatcher(None, probe, l).ratio() for l in cand), default=0) >= 0.6:
+                hits.append(os.path.basename(q))
+        msgs = []
+        if hits:
+            msgs.append(f'最近 {h}h 已寫過相近教訓 {sorted(hits)[:5]}：同一件事反覆記＝可能在迴圈，'
+                        '先 fixindex find 確認、要改內容用 supersede')
+        if reverts >= 2:
+            msgs.append(f'fix-store 最近 {h}h 有 {reverts} 次 Revert：寫了又撤在打轉，停下重述假設')
+        return '；'.join(msgs) or None
+    except Exception:
+        return None
+
+
+def _attach_loop_warning(payload, w):
+    """w 必須在寫入「之前」算好（_loop_warning），否則剛寫的這筆會被當成重複。"""
+    if w:
+        payload['loop_warning'] = w
+        print(f'LOOP-WARNING（advisory，仍已寫入）: {w}', file=sys.stderr)
+
+
+def _expect_defect(fields, append=False):
+    keys = ['symptom', 'root', 'fix', 'verify'] + ([] if append else ['rule'])
+    return {k: fields.get(k, '') for k in keys}
+
+
+def _expect_insight(ini):
+    return {k: ini.get(k, '') for k in ('context', 'insight', 'implication', 'rule')}
+
+
+def _verify_written(path, snap=None, expect=None):
     """寫完立刻驗 frontmatter；壞了就還原（append）或刪除（新檔）並非零退出。
+    expect（{欄位: 輸入值}）：輸入的每個欄位都要真的落在檔案裡，否則同樣還原＋退出——
+    「寫入工具說成功、內容卻被丟」不能 exit 0，否則 agent 只會重寫重記、陷入迴圈。
 
     硬規則：驗失敗一律在 _run_index / _git_commit_push 之前退出，壞資料不進 index、
     不進 git（「宣告 ≠ 生效」：不能寫完就宣稱成功，要重讀磁碟驗證）。"""
@@ -825,6 +901,9 @@ def _verify_written(path, snap=None):
         yaml_lib.safe_load(head)
         if not fm or not str(fm.get('id') or '').strip():
             raise ValueError('frontmatter missing id')
+        miss = _landed_missing(txt, expect)
+        if miss:
+            raise ValueError(f'fields_not_landed: {miss}（輸入有值、檔案裡找不到；已還原）')
     except Exception as e:
         if snap and os.path.exists(snap):
             try:
@@ -1123,14 +1202,14 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
             new_id = next_id(_locked=False)
             slug, _ = _slug_pick(ini.get('slug'), _slug_extra(insight, context, impl), title, fallback='insight')
             entry = build_entry_insight(new_id, title, context, insight, impl, revisit,
-                                        slug, queries, tags, detail)
+                                        slug, queries, tags, detail, rule=ini.get('rule', ''))
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
             import glob as _g
             old_files = sorted(_g.glob(os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')))
             path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
             with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
-            _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+            _verify_written(path, expect=_expect_insight(ini))   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'etype': 'insight', 'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
@@ -1178,7 +1257,7 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
         path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
         with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(entry)
-        _verify_written(path)   # 2d: 寫完即驗
+        _verify_written(path, expect=_expect_insight(ini))   # 2d: 寫完即驗
     _run_index('re-index')
     payload = {'etype': 'insight', 'created': path, 'dedup': False}
     paths = [path, _resolve_index_file()]
@@ -1227,7 +1306,8 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
         with id_lock():
             new_id = next_id(_locked=False)
             slug, _slug_kind = _slug_pick(fields.get('slug'), root, title)
-            entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence)
+            entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence,
+                                rule=fields.get('rule', ''))
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
             old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
             import glob as _g
@@ -1235,7 +1315,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
             path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
             with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
-            _verify_written(path)   # 2d: 寫完即驗，壞檔不進 index/git
+            _verify_written(path, expect=_expect_defect(fields))   # 2d: 寫完即驗，壞檔不進 index/git
         _run_index(f'supersede {old_id} {new_id}')
         payload = {'created': path, 'dedup': True, 'supersedes': old_id}
         paths = [path, _resolve_index_file()] + old_files
@@ -1255,6 +1335,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
             entry_meta = {'evidence': evidence} if (evidence and verify.strip()) else {}
             snap, sec = _append_to_file(match, title, symps, root, fix, verify, detail,
                                         trust=entry_meta)
+            _verify_written(match, snap=snap, expect=_expect_defect(fields, append=True))
             _run_index('re-index')
             payload = {'appended': os.path.basename(match), 'section': sec,
                        'dedup': False, 'undo': snap}
@@ -1274,6 +1355,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
                 entry_meta = {'evidence': evidence} if (evidence and verify.strip()) else {}
                 snap, sec = _append_to_file(ref_path, title, symps, root, fix, verify,
                                             detail, trust=entry_meta)
+                _verify_written(ref_path, snap=snap, expect=_expect_defect(fields, append=True))
                 _run_index('re-index')
                 payload = {'linked': ref_id, 'coverage': round(ref_score, 3),
                            'appended': os.path.basename(ref_path), 'section': sec,
@@ -1293,7 +1375,7 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
             path = os.path.join(FIXINDEX_DIR, f'{fid}-{slug}.md')
             with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
-            _verify_written(path)   # 2d: 寫完即驗
+            _verify_written(path, expect=_expect_defect(fields))   # 2d: 寫完即驗
         _run_index('re-index')
         payload = {'created': path, 'dedup': False}
         paths = [path, _resolve_index_file()]
@@ -1424,9 +1506,11 @@ def main():
 
     if has_insight_key and has_explicit_symptom:
         # 混拆：defect 先寫、insight 後寫、頂層單 commit/push（無名 namespace 併同克哈希）。
+        lw = _loop_warning(fields.get('symptom', ''))
         d_payload, d_paths = _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commit=True)
         i_payload, i_paths = _pipeline_insight(insight_fields, '', mode, tags_arg, defer_commit=True)
         out = {'mixed': True, 'defect': d_payload, 'insight': i_payload}
+        _attach_loop_warning(out, lw)
         if mode == '--commit':
             all_paths = list(dict.fromkeys(d_paths + i_paths))
             out.update(_git_commit_push(all_paths))
@@ -1438,7 +1522,9 @@ def main():
     elif has_insight_key:
         if 'slug' in fields:
             insight_fields.setdefault('slug', fields['slug'])
+        lw = _loop_warning(insight_fields.get('insight') or insight_fields.get('context', ''))
         payload, _ = _pipeline_insight(insight_fields, detail, mode, tags_arg)
+        _attach_loop_warning(payload, lw)
         if mode == '--commit':
             _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
         print(json.dumps(payload, ensure_ascii=False))
@@ -1475,7 +1561,9 @@ def main():
 
     if 'slug' in insight_fields:
         fields.setdefault('slug', insight_fields['slug'])
+    lw = _loop_warning(sympt)
     payload, _ = _pipeline_defect(fields, detail, mode, tags_arg, title_override)
+    _attach_loop_warning(payload, lw)
     if mode == '--commit':
         _compress()          # COMPRESSOR：寫入後補 blurb（加分項，失敗吞）
     print(json.dumps(payload, ensure_ascii=False))
