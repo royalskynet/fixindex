@@ -1265,6 +1265,30 @@ def _pipeline_insight(ini, detail, mode, tags_arg, defer_commit=False):
         payload.update(_git_commit_push(paths))
     return payload, paths
 
+def _read_entry_section(path, n):
+    """讀條目檔中 `## §n ...` 段落內文，頭尾空白去除。檔案不存在或標題不存在回傳空字串。"""
+    if not path or not os.path.exists(path):
+        return ''
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except OSError:
+        return ''
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(r'^##\s*§' + str(n) + r'(?:\s|$)', ln.strip()):
+            start = i
+            break
+    if start is None:
+        return ''
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].lstrip().startswith('## '):
+            end = i
+            break
+    return '\n'.join(lines[start + 1:end]).strip()
+
+
 def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commit=False):
     """Defect 寫入管線（shadow / dedup-supersede / domain-append / new-file），
     抽自 main() 688-745 行。不含首行容錯推斷與 SYMPTOM required 報錯（留在 main）。
@@ -1303,15 +1327,35 @@ def _pipeline_defect(fields, detail, mode, tags_arg, title_override, defer_commi
     if dup:
         # 去個案化：取代舊條目, 不創重複檔
         old_id = dup[0]
+        old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
+        import glob as _g
+        old_files = sorted(_g.glob(old_path))
+        old_file = old_files[0] if old_files else None
+        old_sec2 = _read_entry_section(old_file, 2) if old_file else ''
+        old_sec3 = _read_entry_section(old_file, 3) if old_file else ''
+        old_sec4 = _read_entry_section(old_file, 4) if old_file else ''
+
+        # dedup 繼承：沒給的欄位從舊條目繼承（用原始 fields 判斷是否給）
+        if 'root' not in fields and old_sec2 and old_sec2 != 'untraced':
+            root = old_sec2
+        if 'verify' not in fields and old_sec4 and old_sec4 != 'verified':
+            verify = old_sec4
+        if old_sec3 and old_sec3 != 'applied':
+            if 'fix' in fields:
+                new_fix = fields.get('fix', 'applied')
+                if new_fix and new_fix in old_sec3:
+                    fix = old_sec3
+                else:
+                    fix = old_sec3 + '\n' + new_fix
+            else:
+                fix = old_sec3
+
         with id_lock():
             new_id = next_id(_locked=False)
             slug, _slug_kind = _slug_pick(fields.get('slug'), root, title)
             entry = build_entry(new_id, title, symps, root, fix, verify, slug, tags, detail, evidence,
                                 rule=fields.get('rule', ''))
             os.makedirs(FIXINDEX_DIR, exist_ok=True)
-            old_path = os.path.join(FIXINDEX_DIR, f'{old_id}-*.md')
-            import glob as _g
-            old_files = sorted(_g.glob(old_path))
             path = os.path.join(FIXINDEX_DIR, f'{new_id}-{slug}.md')
             with open(path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(entry)
