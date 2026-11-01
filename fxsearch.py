@@ -169,8 +169,9 @@ SEMANTIC_MODEL = os.environ.get('FIXINDEX_SEMANTIC_MODEL',
                                 'minishlab/potion-multilingual-128M')
 _SEM_CACHE = None
 _SLOT_FD = None
-CACHE_DIR = os.environ.get('FIXINDEX_CACHE_DIR',
-                           os.path.expanduser('~/.cache/fixindex'))
+def _cache_dir():
+    return os.environ.get('FIXINDEX_CACHE_DIR',
+                          os.path.expanduser('~/.cache/fixindex'))
 
 
 def _take_slot():
@@ -181,9 +182,9 @@ def _take_slot():
     global _SLOT_FD
     import fcntl
     slots = int(os.environ.get('FIXINDEX_SEM_SLOTS', '2'))
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    os.makedirs(_cache_dir(), exist_ok=True)
     for i in range(slots):
-        fd = os.open(os.path.join(CACHE_DIR, f'sem-slot-{i}'), os.O_CREAT | os.O_RDWR, 0o644)
+        fd = os.open(os.path.join(_cache_dir(), f'sem-slot-{i}'), os.O_CREAT | os.O_RDWR, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             _SLOT_FD = fd
@@ -232,7 +233,7 @@ def _entry_matrix(model, np, raws):
     """條目向量存磁碟，內容沒變就不重算（重算全部條目是記憶體峰值的大頭）。"""
     import hashlib
     key = hashlib.sha1((SEMANTIC_MODEL + '\0' + '\0'.join(raws)).encode()).hexdigest()
-    path = os.path.join(CACHE_DIR, 'emb-' + re.sub(r'\W', '_', SEMANTIC_MODEL) + '.npz')
+    path = os.path.join(_cache_dir(), 'emb-' + re.sub(r'\W', '_', SEMANTIC_MODEL) + '.npz')
     try:
         with np.load(path) as z:
             if str(z['key']) == key:
@@ -245,7 +246,7 @@ def _entry_matrix(model, np, raws):
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
     mat = (mat / np.where(norms < 1e-9, 1.0, norms)).astype(np.float32)
     try:
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        os.makedirs(_cache_dir(), exist_ok=True)
         tmp = path + f'.{os.getpid()}.tmp.npz'
         np.savez(tmp, key=np.array(key), mat=mat)
         os.replace(tmp, path)
@@ -417,6 +418,8 @@ def main():
     args = sys.argv[1:]
     limit = 8
     json_out = False
+    # --spill：兩段式注入（借鏡 MCP resource_link）。預設仍回全文，呼叫端加了才只回 ID＋首行。
+    spill = False
     etype = None
     q = None
     i = 0
@@ -430,6 +433,8 @@ def main():
         elif a == '--type' and i+1 < len(args):
             etype = args[i+1]
             i += 1
+        elif a == '--spill':
+            spill = True
         elif not a.startswith('--'):
             if q is None:
                 q = a
@@ -479,8 +484,15 @@ def main():
         for e, s in top:
             mark = " [ext]" if e['type'] == 'external' else ""
             badge = _badge('superseded' if e['superseded'] else e['trust_state'])
-            print(f"  {e['key']:<8} {badge} {e['section']:<5} ({s:4.2f}){mark}  {e['heading']}")
-        print(f"\nmatched {len(results)} sections; showing top {len(top)}")
+            if spill:
+                # 只給定位資訊；要全文用 fixindex show <file>
+                print(f"  {e['key']:<8} {badge} {e['file']}  {e['title'][:60]}")
+            else:
+                print(f"  {e['key']:<8} {badge} {e['section']:<5} ({s:4.2f}){mark}  {e['heading']}")
+        if spill:
+            print(f"\nmatched {len(results)} sections; showing top {len(top)}（概略模式：fixindex show <file> 取全文）")
+        else:
+            print(f"\nmatched {len(results)} sections; showing top {len(top)}")
 
 
 if __name__ == '__main__':
