@@ -7,6 +7,7 @@
 fail-open：任何錯誤只輸出空字串、exit 0。
 
 用法：fxhot.py [--days 14] [--min-sessions 3] [--top 5]
+      fxhot.py --report   各注入層「注入後下一次工具呼叫成功率」（outcome log，fixindex-pretool.js 寫）
 環境：FIXINDEX_RECALL_LOG、FIXINDEX_PITFALLS 覆寫路徑（測試用）。
 """
 import argparse, collections, datetime as dt, json, os, sys
@@ -14,6 +15,7 @@ import argparse, collections, datetime as dt, json, os, sys
 HOME = os.path.expanduser('~')
 RECALL_LOG = os.environ.get('FIXINDEX_RECALL_LOG', os.path.join(HOME, '.claude', 'logs', 'fixindex-recall.jsonl'))
 PITFALLS = os.environ.get('FIXINDEX_PITFALLS', os.path.join(HOME, 'dev', 'fix-store', 'pitfalls.tsv'))
+OUTCOME_LOG = os.environ.get('FIXINDEX_OUTCOME_LOG', RECALL_LOG[:-len('.jsonl')] + '-outcome.jsonl' if RECALL_LOG.endswith('.jsonl') else RECALL_LOG + '-outcome.jsonl')
 ADVICE_MAX = 110
 
 
@@ -46,12 +48,38 @@ def hot(now, days, min_sessions, top):
     return [(i, len(sess[i]), *adv[i]) for i in ranked]
 
 
+def report(now, days):
+    cut = (now - dt.timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%S')
+    agg = collections.defaultdict(lambda: [0, 0])
+    for line in open(OUTCOME_LOG, encoding='utf-8'):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if str(r.get('ts', '')) < cut:
+            continue
+        a = agg[f"{r.get('layer')}:{r.get('trigger')}"]
+        a[0] += 1
+        a[1] += bool(r.get('ok'))
+    return sorted(((k, n, ok) for k, (n, ok) in agg.items()), key=lambda x: -x[1])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--days', type=int, default=14)
     ap.add_argument('--min-sessions', type=int, default=3)
     ap.add_argument('--top', type=int, default=5)
+    ap.add_argument('--report', action='store_true')
     a = ap.parse_args()
+    if a.report:
+        try:
+            rows = report(dt.datetime.now(dt.timezone.utc).replace(tzinfo=None), a.days)
+        except FileNotFoundError:
+            rows = []
+        print(f'注入後下一次工具呼叫成功率（近 {a.days} 天）:' if rows else '尚無 outcome 紀錄')
+        for k, n, ok in rows:
+            print(f'  {k:32s} {ok}/{n}  {ok * 100 // n}%')
+        return 0
     try:
         rows = hot(dt.datetime.now(dt.timezone.utc).replace(tzinfo=None), a.days, a.min_sessions, a.top)
     except Exception:

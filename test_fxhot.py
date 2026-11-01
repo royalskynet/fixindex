@@ -26,4 +26,10 @@ with tempfile.TemporaryDirectory() as d:
     env['FIXINDEX_RECALL_LOG'] = os.path.join(d, 'none')
     out = subprocess.run([sys.executable, os.path.join(HERE, 'fxhot.py')], capture_output=True, text=True, env=env)
     assert out.returncode == 0 and out.stdout == '', out
-print('PASS fxhot promote/decay')
+    # --report: outcome success rate per layer:trigger
+    oc = os.path.join(d, 'o.jsonl')
+    open(oc, 'w').write('\n'.join(json.dumps({'ts': fresh, 'layer': 'bm25', 'trigger': 'retry-same', 'ok': k}) for k in (True, False, True, True)) + '\n')
+    env['FIXINDEX_OUTCOME_LOG'] = oc
+    out = subprocess.run([sys.executable, os.path.join(HERE, 'fxhot.py'), '--report'], capture_output=True, text=True, env=env)
+    assert 'bm25:retry-same' in out.stdout and '3/4  75%' in out.stdout, out.stdout
+print('PASS fxhot promote/decay/report')

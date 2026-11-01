@@ -314,6 +314,16 @@ cat agent-snippets/generic.md >> <你的 agent 規則檔>      # 通用
 
 不失敗不觸發，頻率天然有界；plan 前查不到的雷，踩到當下查得到。實作細節與兩個實測坑（PostToolUse 失敗不觸發、hook 內嵌 find 的 timeout 餘裕）見 [`docs/agent-integration.md`](./docs/agent-integration.md) Mode C；權威參考實作在本 repo [`hooks/`](./hooks)（`plan-path-notice.js`、`fi-reminder.sh`），Ether-prompt 僅部署副本。
 
+### 跨 session 經驗回饋（借鏡 microsoft/TokenEconomizer，零 LLM）
+
+[TokenEconomizer](https://github.com/microsoft/TokenEconomizer) 三機制裡兩個搬過來、拿掉 LLM：
+
+- **開場先講常犯坑**（對應 micro-skills）：`fxhot.py` 讀 recall log，近 14 天在 ≥3 個 session 撞到的 T6 已知坑，SessionStart 開場就列出；窗口外沒再撞到就自動退場。
+- **迴圈防護**（對應 loop guard，judge 改成確定性規則）：`fixindex-pretool.js` 對最近 20 次工具結果開滑動窗，同一錯誤簽名出現 3 次、或同檔改 4 次且失敗 3 次 → 注入一次轉向；轉向後又卡 → 叫 agent 停手回報。只提示不擋工具；`FIXINDEX_LOOPGUARD=0` 關閉。
+- **成效量測**：每次注入後緊接的工具結果寫進 `fixindex-recall-outcome.jsonl`，`fxhot.py --report` 列各注入層的後續成功率。
+
+工具裁剪沒搬：Claude Code 已延遲載入 MCP 工具（只送名稱），可省的量很小。
+
 ### 一鍵自動紀錄（`auto` 一鍵直落）
 
 開發/除錯結束想快速記一筆，不需開 stdin。一行版（`auto --symptom`/`--fix`/`--tags`）：
