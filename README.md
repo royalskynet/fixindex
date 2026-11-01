@@ -319,7 +319,7 @@ cat agent-snippets/generic.md >> <你的 agent 規則檔>      # 通用
 [TokenEconomizer](https://github.com/microsoft/TokenEconomizer) 三機制裡兩個搬過來、拿掉 LLM：
 
 - **開場先講常犯坑**（對應 micro-skills）：`fxhot.py` 讀 recall log，近 14 天在 ≥3 個 session 撞到的 T6 已知坑，SessionStart 開場就列出；窗口外沒再撞到就自動退場。
-- **迴圈防護**（對應 loop guard，judge 改成確定性規則）：`fixindex-pretool.js` 對最近 20 次工具結果開滑動窗，同一錯誤簽名出現 3 次、或同檔改 4 次且失敗 3 次 → 注入一次轉向；轉向後又卡 → 叫 agent 停手回報。只提示不擋工具；`FIXINDEX_LOOPGUARD=0` 關閉。
+- **迴圈防護**（對應 loop guard，judge 改成確定性規則）：`fixindex-pretool.js` 對最近 20 次工具結果開滑動窗，同一動作同一錯誤出現 3 次、或同檔改 4 次且失敗 ≥5 次（其中重複錯誤占 ≥20%）→ 注入一次轉向；轉向後又卡 → 叫 agent 停手回報。工具結果相隔 >10 分鐘視為換了一輪，窗清空。只提示不擋工具；`FIXINDEX_LOOPGUARD=0` 關閉。門檻固定不自適應：TokenEconomizer 的 envelope 只決定 LLM judge 何時出手，論文沒有它勝過固定門檻的數據；OpenHands StuckDetector、opencode doom_loop、Cline 也都用固定門檻。
 - **成效量測**：每次注入後緊接的工具結果寫進 `fixindex-recall-outcome.jsonl`，`fxhot.py --report` 列各注入層的後續成功率。
 
 工具裁剪沒搬：Claude Code 已延遲載入 MCP 工具（只送名稱），可省的量很小。
