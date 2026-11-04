@@ -713,7 +713,7 @@ _fi_defer_if_readonly() {
   local input="$spool/fi-$ts.txt" args="$spool/fi-$ts.args"
   if [[ ! -t 0 ]]; then cat > "$input"; else : > "$input"; fi
   printf '%s\n' "$@" > "$args"
-  printf '{"deferred": true, "next": "fi-flush", "args": "%s", "input": "%s", "log": "%s/Library/Logs/openclaw/wrappers.log", "note": "FIXINDEX_DIR 唯讀（沙箱）；fi-flush 消化 spool"}\n' "$args" "$input" "$HOME"
+  printf '{"deferred": true, "next": "fi-flush", "args": "%s", "input": "%s", "log": "%s/Library/Logs/agent-tools/wrappers.log", "note": "FIXINDEX_DIR 唯讀（沙箱）；fi-flush 消化 spool"}\n' "$args" "$input" "$HOME"
   echo "fixindex: DEFERRED（未落地）— FIXINDEX_DIR 唯讀，已排進 spool，需沙箱外 fi-flush 消化" >&2
   # 0912: 這裡曾 return 0。fi-flush 只看 rc，rc=0 → 刪掉 spool pair 並記 "clean rc=0"，
   # 但同一次呼叫又在沙箱內重新 defer 出一筆新的 → 刪一筆生一筆、log 全綠、零筆落地。
