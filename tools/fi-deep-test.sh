@@ -10,10 +10,10 @@ chk() { if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got '$2' wa
 WALLET="0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
 cat > "$T/s.jsonl" <<EOF
 {"type":"user","message":{"content":"轉帳到 ${WALLET}，聯絡 John Smith"}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"dcq_busy_test 斷言修好了"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"dcq_busy_test 斷言修好了，OmniRoute 與 Presidio 正常，Alice 回覆了，ref_9911"}]}}
 EOF
 
-# 假 scrub：錢包與姓名換佔位符；/health 回 200
+# 假 scrub：錢包、姓名換佔位符，並模擬 Presidio 把技術詞誤標 PERSON；mapping 帶原值；/health 回 200
 cat > "$T/scrub.py" <<'PY'
 import json, re, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -23,8 +23,17 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        out = [re.sub(r"0x[0-9a-fA-F]{40}", "<WALLET_ADDRESS_1>", t).replace("John Smith", "<PERSON_1>") for t in body["texts"]]
-        b = json.dumps({"texts": out, "mapping": {}, "count": 2}).encode()
+        hits = {"John Smith": "<PERSON_1>", "dcq_busy_test": "<PERSON_2>", "OmniRoute": "<PERSON_3>",
+                "Presidio": "<PERSON_4>", "Alice": "<PERSON_5>", "ref_9911": "<CREDIT_CARD_1>"}
+        mp, out = {}, []
+        for t in body["texts"]:
+            for m in re.findall(r"0x[0-9a-fA-F]{40}", t):
+                mp["<WALLET_ADDRESS_1>"] = m; t = t.replace(m, "<WALLET_ADDRESS_1>")
+            for k, ph in hits.items():
+                if k in t:
+                    mp[ph] = k; t = t.replace(k, ph)
+            out.append(t)
+        b = json.dumps({"texts": out, "mapping": mp, "count": len(mp)}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
 s = HTTPServer(("127.0.0.1", 0), H)
 open(sys.argv[1], "w").write(str(s.server_port))
@@ -52,7 +61,11 @@ W="$(ls -d "$T/tmp"/fi-deep-* | head -1)"
 chk "part 檔存在" "$(ls "$W"/part.*.txt 2>/dev/null | wc -l | tr -d ' ')" "1"
 chk "part 不含錢包" "$(grep -c "$WALLET" "$W"/part.*.txt)" "0"
 chk "part 不含姓名" "$(grep -c 'John Smith' "$W"/part.*.txt)" "0"
-chk "part 保留技術詞" "$(grep -c 'dcq_busy_test' "$W"/part.*.txt)" "1"
+chk "part 不含單名" "$(grep -c 'Alice' "$W"/part.*.txt)" "0"
+chk "誤遮還原：識別字" "$(grep -c 'dcq_busy_test' "$W"/part.*.txt)" "1"
+chk "誤遮還原：CamelCase" "$(grep -c 'OmniRoute' "$W"/part.*.txt)" "1"
+chk "誤遮還原：白名單" "$(grep -c 'Presidio' "$W"/part.*.txt)" "1"
+chk "硬類別不還原" "$(grep -c 'ref_9911' "$W"/part.*.txt)" "0"
 chk "未脫敏中間檔已刪" "$(ls "$W"/raw.txt "$W"/masked.txt 2>/dev/null | wc -l | tr -d ' ')" "0"
 chk "工單列出 part 路徑" "$(grep -c "$W/part.01.txt" "$task")" "1"
 chk "工單含報告路徑" "$(grep -c "$W/report.md" "$task")" "2"

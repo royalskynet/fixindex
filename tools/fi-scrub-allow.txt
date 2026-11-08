@@ -1,0 +1,24 @@
+# fi-deep 白名單：Presidio 標成 PERSON／LOCATION／URL、但其實是工具或專案名的詞，一行一個，不分大小寫、整值比對。
+# 只放公開的技術詞；人名、地址不放。錢包、雜湊、卡號、電話、email、IP 不受本檔影響，一律維持遮罩。
+Claude Code
+Codex
+DeepSeek
+OpenCode
+OpenCode Go
+Presidio
+LiteLLM
+OmniRoute
+Hermes
+Genie
+Jev
+Mythos
+Orchestrator
+Builder
+Scribe
+Coco
+OpenClaw
+GitHub
+Happy
+Opus
+Sonnet
+Haiku

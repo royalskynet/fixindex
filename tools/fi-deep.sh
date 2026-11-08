@@ -17,6 +17,7 @@ SCRUB="${FI_SCRUB_URL:-http://127.0.0.1:4102}"
 TASKS="${FI_TASK_DIR:-$HOME/.deepclaude/work/tasks}"
 LINT="${FI_DEEP_LINT:-deep-lint}"
 CHUNK="${FI_CHUNK_BYTES:-140000}"
+ALLOWF="${FI_SCRUB_ALLOW:-$(cd "$(dirname "$0")" && pwd)/fi-scrub-allow.txt}"
 STORE="${FIXINDEX_DIR:-$HOME/dev/fix-store/fixes}"
 DEEP_CWD="$(dirname "$STORE")"
 
@@ -37,9 +38,36 @@ node "$MASK" "$W/raw.txt" "$W/masked.txt" >/dev/null
 rm -f "$W/raw.txt"
 
 # Presidio scrub（錢包、交易雜湊、姓名、電話、卡號…）；回應的 mapping 含原值，只取 texts、不落檔
-python3 - "$W/masked.txt" "$W" "$SCRUB" "$CHUNK" <<'PY' || { echo "fi-deep: PII scrub 失敗（${SCRUB}），fail-closed 不產工單" >&2; exit 3; }
-import json, sys, urllib.request
-src, outdir, url, chunk = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+python3 - "$W/masked.txt" "$W" "$SCRUB" "$CHUNK" "$ALLOWF" <<'PY' || { echo "fi-deep: PII scrub 失敗（${SCRUB}），fail-closed 不產工單" >&2; exit 3; }
+import json, os, re, sys, urllib.request
+src, outdir, url, chunk, allow_path = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
+
+# Presidio 在中英混雜的技術逐字稿會把識別字、路徑、中文片語標成 PERSON／LOCATION／URL。
+# 只還原這三類裡「看起來是技術詞」的值；錢包、雜湊、卡號、電話、email、IP、身分證等一律不還原。
+PH = re.compile(r"<([A-Z][A-Z_]*?)_(\d+)>")
+SOFT = {"PERSON", "LOCATION", "URL"}
+ALLOW = set()
+if os.path.exists(allow_path):
+    ALLOW = {ln.strip().lower() for ln in open(allow_path, encoding="utf-8") if ln.strip() and not ln.startswith("#")}
+CJK = re.compile(r"[㐀-鿿]")
+def technical(kind, v):
+    if v.lower() in ALLOW:
+        return True
+    if kind == "URL":
+        return "@" not in v and "?" not in v
+    if CJK.search(v):
+        return len(v) >= 5                      # 人名多為 2–4 字
+    if re.search(r"[_./\\\-0-9:$`<>=]", v):
+        return True                             # 識別字、路徑、旗標
+    if v.islower() or v.isupper():
+        return True                             # 全小寫指令名、全大寫常數
+    if " " not in v.strip() and re.search(r"[a-z][A-Z]", v):
+        return True                             # 內部帶大寫的 CamelCase（DeepSeek）
+    return False                                # 「Alice」「John Smith」這類首字大寫：維持遮罩
+def restore(m, mp):
+    ph = m.group(0)
+    v = mp.get(ph)
+    return v if v is not None and m.group(1) in SOFT and technical(m.group(1), v) else ph
 lines = open(src, encoding="utf-8").read().splitlines(keepends=True)
 blocks, cur = [], ""
 for ln in lines:
@@ -53,9 +81,12 @@ for i in range(0, len(blocks), 20):
     batch = blocks[i:i + 20]
     req = urllib.request.Request(url + "/scrub", data=json.dumps({"texts": batch}).encode(),
                                  headers={"Content-Type": "application/json"})
-    got = json.load(urllib.request.urlopen(req, timeout=300))["texts"]
+    d = json.load(urllib.request.urlopen(req, timeout=300))
+    got, mp = d["texts"], d.get("mapping") or {}
     if len(got) != len(batch):
         raise SystemExit("scrub 回傳筆數不符")
+    # 誤遮還原：mapping 只在本機用。佔位符編號每次請求重算，所以逐批還原
+    got = [PH.sub(lambda m: restore(m, mp), t) for t in got]
     out.extend(got)
 # 依行切塊，避免 UTF-8 字元被切斷
 n, buf = 0, b""
