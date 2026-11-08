@@ -9,48 +9,29 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
 1. **insight** — 已固化的設計洞見／架構決策／跨案模式：改方式比記解法有價值、別的專案也用得到。
 2. **symptom**（一般 defect 條目）— 症狀→根因→解法→驗證：會重複撞到、下次 `fixindex find "<關鍵字>"` 找得到。
 
-## 程序
+## 程序（2026-11-09 起：掃描、收斂、寫入全派 deep，不派 Claude 子代理）
 
-步驟 0–2 是機械活，派 sonnet 子代理；步驟 3 起的判斷留主 session。
+主 session 只做三件事：跑 `fi-deep` 產工單、裸名派 `deep-run`、收件重驗。
 
-0. **抽出脫敏的精簡 transcript**（不可省：原始 jsonl 會超過子代理 window）：
+1. **產工單**（抽 transcript → 遮罩 → Presidio scrub → 切塊 → 產 deep 工單 → deep-lint，全在腳本內）：
 
    ```bash
-   T=$(ls -t ~/.claude/projects/"$(pwd | sed 's#[/.]#-#g')"/*.jsonl | head -1)
-   OUT="${TMPDIR:-/tmp}/fi-scan-$$.txt"
-   jq -r 'select(.type=="user" or .type=="assistant") | .message.content |
-     if type=="array" then (map(
-       if .type=="text" then .text
-       elif .type=="tool_use" then "TOOL "+.name+" "+((.input|tostring)[0:300])
-       elif .type=="tool_result" then "RESULT "+((.content|tostring)[0:600])
-       else empty end)|join("\n")) else tostring end' "$T" > "$OUT"
-   node ~/.claude/tools/fi-mask-transcript.mjs "$OUT" "$OUT.masked"   # 不可省
-   wc -c "$OUT.masked"
+   bash ~/dev/fixindex/tools/fi-deep.sh            # 或帶 session jsonl 絕對路徑
    ```
 
-   最新 mtime 的 jsonl 就是本 session；同 cwd 有並行 session 時改用 scratchpad 目錄名（＝session id）。
-   - **只把 `$OUT.masked` 給子代理**，不給 `$OUT` 或原始 jsonl；未脫敏版有 key 樣字串、email、IP，會被 sensitive-canary 擋（通常是真陽性）。
-   - 不改 canary 規則、不要 allow 標籤、不繞過 guard。
-   - 脫敏後確認一次：餵 canary hook `{"tool_name":"Read","tool_input":{"file_path":"<masked>"}}` 應 rc=0。路徑別寫在 Bash 指令列（canary 會展開路徑先擋你），寫成小 node runner 在腳本內組路徑。
+   - 同 cwd 有並行 session 時，帶本 session 的 jsonl 路徑（檔名＝session id），不靠最新 mtime。
+   - 退出碼：0 已產工單｜2 找不到 transcript｜3 PII scrub（:4102）不通，fail-closed，不留任何產物｜4 deep-lint FAIL。
+   - rc=3 → 先看 `launchctl list | grep pii-gateway` 與 :4102，修好再跑；**不准**繞過 scrub 直接把逐字稿交給 deep（deep 是外部 LLM，鐵則 6）。
+2. **派 deep**：照抄腳本最後一行 `deep-run <工單> <cwd>`，裸名、單一指令、`run_in_background: true`。
+3. **收件**：
+   - `wo-verify <工單>` 自己重跑，rc=0 才算完成；deep 的 `VERIFY_FAIL` 照 deep skill 收件規則查。
+   - 讀報告（腳本印的 `report:` 路徑），轉述新增（編號＋核心）、補充、略過與 `fixindex status` 結果。
+   - 新增條目抽一兩條 `fixindex show <編號>` 看欄位是不是可搜尋關鍵字、RULE 是否可泛化；不合格就寫補單再派 deep，不自己改條目。
+4. **候選為空**：報告「## 新增」下是「- 無」→ 一句「本 session 無新的可記經驗」帶過。
 
-1-2. **背景派一次 `Agent`**（`subagent_type: "general-purpose"`, `model: "sonnet"`, `run_in_background: true`；單塊要跑數分鐘，前景派使用者會以為卡死）。prompt 自含以下全部（子代理看不到本對話）：
+工單內容（窮舉候選、逐條 `fixindex find`／`insights` 查重、收斂、`printf … | fixindex fi` 寫入、報告格式、驗收）由 `fi-deep.sh` 產生，改流程就改腳本與 `tools/fi-deep-test.sh`，不在這裡另寫一份。
 
-   - `$OUT.masked` 的絕對路徑，**逐條掃過**，不抽樣；不要還原 `<MASKED_*>`、不要讀未脫敏原檔。
-   - **窮舉候選**：每段改動、每條報錯、每個重新摸索才搞懂的點，含「糾正誤解」。**反事實閘門**：出過錯、查到根因、改了做法的點至少列進候選。寧可多列，值不值得記不歸它判。
-   - **逐條去重**：每個候選跑 `fixindex find "<核心關鍵字>"` 與 `fixindex insights "<主題>"`，原始輸出附在該候選下。
-   - 回報格式：「候選核心 ≤80 字／建議類型 insight|symptom／查重指令與原始輸出／已存在 or 新」。**只回報，不寫入 fixindex。**
+## 欄位（工單已附，供核對）
 
-   `$OUT.masked` >150 KB → 切塊，**同一個 response 內一次派完全部塊**，各自回報，主 session 合併。
-   子代理仍被 canary 擋 → 它停手回報阻斷點；主 session 先補 `fi-mask-transcript.mjs` 遮罩規則再重派，補不動才用自己 context 內的記憶直接掃。
-
-3. **收斂**（主 session）：濾掉一次性、專案私有、無重現價值的，只留「下次找得到才有意義」的。子代理標「已存在」的，核對查重輸出是否真的等效。
-4. **逐項草擬**：類型、≤80 字核心、欄位。欄位值用**可搜尋關鍵字**，不寫流水敘述：
-   - symptom：`SYMPTOM:` `ROOT:` `FIX:` `VERIFY:` `RULE:`（建新條目必帶 RULE）
-   - insight：`CONTEXT:` `INSIGHT:` `IMPLICATION:` `QUERIES:` `RULE:`
-5. **候選為空**：明說「本 session 無新的可記經驗」，一句帶過就停，不硬湊。
-
-## 完成
-
-- 通過閘門的候選**直接自動記入**，不逐項問使用者：`printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …\nRULE: …' | fixindex fi`；insight 同樣 pipe 給 `fixindex fi`（帶 `INSIGHT:` 就走 insight 管線）。欄位與 SLUG 細節見 `fixindex fi --help`。
-- 回報：新增哪幾條（編號＋核心）、略過哪些（已存在／無重現價值）。
-- 最後跑 `fixindex status --json --assert-clean` 並回報結果。
+- symptom：`SYMPTOM:` `ROOT:` `FIX:` `VERIFY:` `RULE:`（建新條目必帶 RULE）
+- insight：`CONTEXT:` `INSIGHT:` `IMPLICATION:` `QUERIES:` `RULE:`

@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# fi-deep — /fi 的 deep 派工準備：抽 transcript → 遮罩 → Presidio scrub → 切塊 → 產 deep 工單 → deep-lint。
+# 用法：fi-deep [session.jsonl]（省略＝cwd 對應專案目錄裡最新的 jsonl）
+# 成功時最後一行印「deep-run <工單> <cwd>」，主 session 照抄裸名呼叫（deep-run 不能從腳本內呼叫，會掉回沙箱）。
+# 退出碼：0 工單已產且 lint 無 FAIL｜2 找不到 transcript｜3 PII scrub 失敗（fail-closed，不留任何產物）｜4 deep-lint FAIL
+set -eu
+
+J="${1:-}"
+if [ -z "$J" ]; then
+  slug="$(pwd | sed 's#[/.]#-#g')"
+  J="$(ls -t "$HOME/.claude/projects/$slug"/*.jsonl 2>/dev/null | head -1 || true)"
+fi
+[ -n "$J" ] && [ -s "$J" ] || { echo "fi-deep: 找不到 transcript：${J:-（空）}" >&2; exit 2; }
+
+MASK="${FI_MASK:-$HOME/.claude/tools/fi-mask-transcript.mjs}"
+SCRUB="${FI_SCRUB_URL:-http://127.0.0.1:4102}"
+TASKS="${FI_TASK_DIR:-$HOME/.deepclaude/work/tasks}"
+LINT="${FI_DEEP_LINT:-deep-lint}"
+CHUNK="${FI_CHUNK_BYTES:-140000}"
+STORE="${FIXINDEX_DIR:-$HOME/dev/fix-store/fixes}"
+DEEP_CWD="$(dirname "$STORE")"
+
+sid="$(basename "$J" .jsonl)"
+sid8="$(printf '%s' "$sid" | cut -c1-8)"
+W="$(mktemp -d "${TMPDIR:-/tmp}/fi-deep-$sid8.XXXXXX")"
+ok=0
+# 未脫敏的中間檔一律不留；失敗時整個工作目錄清掉
+trap 'rm -f "$W/raw.txt" "$W/masked.txt"; [ "$ok" = 1 ] || rm -rf "$W"' EXIT
+
+jq -r 'select(.type=="user" or .type=="assistant") | .message.content |
+  if type=="array" then (map(
+    if .type=="text" then .text
+    elif .type=="tool_use" then "TOOL "+.name+" "+((.input|tostring)[0:300])
+    elif .type=="tool_result" then "RESULT "+((.content|tostring)[0:600])
+    else empty end)|join("\n")) else tostring end' "$J" > "$W/raw.txt"
+node "$MASK" "$W/raw.txt" "$W/masked.txt" >/dev/null
+rm -f "$W/raw.txt"
+
+# Presidio scrub（錢包、交易雜湊、姓名、電話、卡號…）；回應的 mapping 含原值，只取 texts、不落檔
+python3 - "$W/masked.txt" "$W" "$SCRUB" "$CHUNK" <<'PY' || { echo "fi-deep: PII scrub 失敗（${SCRUB}），fail-closed 不產工單" >&2; exit 3; }
+import json, sys, urllib.request
+src, outdir, url, chunk = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+lines = open(src, encoding="utf-8").read().splitlines(keepends=True)
+blocks, cur = [], ""
+for ln in lines:
+    if cur and len(cur) + len(ln) > 6000:
+        blocks.append(cur); cur = ""
+    cur += ln
+if cur:
+    blocks.append(cur)
+out = []
+for i in range(0, len(blocks), 20):
+    batch = blocks[i:i + 20]
+    req = urllib.request.Request(url + "/scrub", data=json.dumps({"texts": batch}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    got = json.load(urllib.request.urlopen(req, timeout=300))["texts"]
+    if len(got) != len(batch):
+        raise SystemExit("scrub 回傳筆數不符")
+    out.extend(got)
+# 依行切塊，避免 UTF-8 字元被切斷
+n, buf = 0, b""
+for text in out:
+    for ln in text.splitlines(keepends=True):
+        b = ln.encode("utf-8")
+        if buf and len(buf) + len(b) > chunk:
+            n += 1; open(f"{outdir}/part.{n:02d}.txt", "wb").write(buf); buf = b""
+        buf += b
+if buf:
+    n += 1; open(f"{outdir}/part.{n:02d}.txt", "wb").write(buf)
+PY
+rm -f "$W/masked.txt"
+
+R="$W/report.md"
+mkdir -p "$TASKS"
+TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
+{
+  printf '# /fi：掃 session %s，記入 fixindex\n\n' "$sid8"
+  printf '## 任務\n\n'
+  printf '逐塊、逐段讀完下列已脫敏的 session 精簡逐字稿（不抽樣）：\n\n'
+  for p in "$W"/part.*.txt; do printf -- '- `%s`\n' "$p"; done
+  cat <<EOF
+
+1. **窮舉候選**：每段改動、每條報錯、每個重新摸索才搞懂的點，含糾正誤解。出過錯、查到根因、改了做法的點至少列進候選。
+2. **逐條查重**：每個候選跑 \`fixindex find "<核心關鍵字>"\` 與 \`fixindex insights "<主題>"\`。
+3. **收斂**：濾掉一次性、只對單一專案有意義、無重現價值的；只留「下次 \`fixindex find\` 找得到才有意義」的。已存在且等效的不重記。
+4. **寫入**：每條通過的用 \`printf '…' | fixindex fi\`（不帶任何參數）寫入。欄位值寫可搜尋關鍵字：
+   - symptom：\`SYMPTOM:\` \`ROOT:\` \`FIX:\` \`VERIFY:\` \`RULE:\`（RULE 必填，寫拿掉專案名後仍成立的可泛化規則）
+   - insight：\`CONTEXT:\` \`INSIGHT:\` \`IMPLICATION:\` \`QUERIES:\` \`RULE:\`
+   - fixindex fi 回 INTAKE gate 時照它的提示補 RULE 再寫；回 JSON 的 \`created\`／\`appended\` 路徑記下編號。
+5. **報告**：寫 \`$R\`，格式固定：
+
+\`\`\`
+## 新增
+- <編號> <≤80 字核心>
+## 補充既有
+- <編號> <≤80 字核心>
+## 略過
+- <≤80 字核心> — <已存在 NNNN｜無重現價值｜一次性>
+## status
+<fixindex status --json --assert-clean 的原始輸出>
+\`\`\`
+
+沒有可記的就在「## 新增」下寫「- 無」，其餘段照列。
+
+## 不動
+
+- \`$STORE\` 裡的既有條目檔不手改，一律經 \`fixindex fi\`。
+- 只讀上列 part 檔；其他 transcript、\`~/.claude/projects/**/*.jsonl\` 不讀。
+
+## 禁止
+
+- 不還原 \`<MASKED_*>\` 與 \`<PERSON_1>\` 這類佔位符，不猜原值寫進條目。
+- 不給 \`fixindex fi\`／\`fixindex new\` 帶參數（參數會被當 slug 建垃圾檔）。
+- 不用 \`set -x\`，不印憑證值。
+- \`launchctl bootout/bootstrap/kickstart\` 必帶完整 service target \`gui/\$(id -u)/<label>\`；裸 domain 與 \`launchctl reboot\` 禁止。本任務用不到 launchctl。
+- 無頭機：禁止回報「請使用者手動貼 token／授權／執行指令」；fixindex push 失敗就停手回報阻斷點。
+
+## 驗收
+
+預期：報告存在且四段齊全；報告列出的每個編號都查得到條目；fixindex 狀態乾淨。
+
+\`\`\`bash
+set -eu
+R='$R'
+test -s "\$R"
+for h in '## 新增' '## 補充既有' '## 略過' '## status'; do grep -qxF "\$h" "\$R"; done
+ids="\$(awk '/^## (新增|補充既有)\$/{f=1;next} /^## /{f=0} f && /^- [0-9]+ /{print \$2}' "\$R")"
+for id in \$ids; do fixindex show "\$id" >/dev/null; done
+echo "ids=\$(printf '%s ' \$ids)"
+fixindex status --json --assert-clean
+\`\`\`
+EOF
+} > "$TASK"
+
+if "$LINT" "$TASK" 2>&1 | grep -q 'LINT FAIL'; then
+  "$LINT" "$TASK" >&2 || true
+  echo "fi-deep: deep-lint FAIL：$TASK" >&2
+  exit 4
+fi
+ok=1
+echo "report: $R"
+echo "deep-run $TASK $DEEP_CWD"
