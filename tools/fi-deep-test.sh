@@ -71,6 +71,23 @@ chk "工單列出 part 路徑" "$(grep -c "$W/part.01.txt" "$task")" "1"
 chk "工單含報告路徑" "$(grep -c "$W/report.md" "$task")" "2"
 chk "工單有驗收段" "$(grep -cx '## 驗收' "$task")" "1"
 
+# 1b. 驗收段：引用必須逐字出現在 part 檔與條目（假 fixindex：show 印 $T/entry，status 回 0）
+mkdir -p "$T/bin"
+printf '#!/bin/sh\n[ "$1" = show ] && cat "%s/entry"\nexit 0\n' "$T" > "$T/bin/fixindex"; chmod +x "$T/bin/fixindex"
+awk '/^```bash$/{f=1;next} /^```$/{f=0} f' "$task" > "$T/accept.sh"
+Q='dcq_busy_test 斷言修好了'
+rep() { { printf '## 新增\n- 12345 測試條目\n'; [ -n "$1" ] && printf '  原文：%s\n' "$1"; printf '## 補充既有\n## 略過\n## status\n{}\n'; } > "$W/report.md"; }
+acc() { PATH="$T/bin:$PATH" bash "$T/accept.sh" >/dev/null 2>&1 && echo 0 || echo 1; }
+printf 'SYMPTOM: 原文：%s\n' "$Q" > "$T/entry"
+rep "$Q"; chk "引用在逐字稿與條目 → 過" "$(acc)" "0"
+rep "";   chk "缺原文 → 擋" "$(acc)" "1"
+rep "collection 只出現 5 分鐘之後就不見"; printf 'SYMPTOM: collection 只出現 5 分鐘之後就不見\n' > "$T/entry"
+chk "杜撰引用（不在逐字稿）→ 擋" "$(acc)" "1"
+printf 'SYMPTOM: 改寫過的症狀\n' > "$T/entry"; rep "$Q"
+chk "條目沒放引用 → 擋" "$(acc)" "1"
+rep "斷言修好了"; printf 'SYMPTOM: 斷言修好了\n' > "$T/entry"
+chk "引用太短 → 擋" "$(acc)" "1"
+
 # 2. scrub 不通：fail-closed，不留工單與工作目錄
 rm -rf "$T/tmp" "$T/tasks"; mkdir -p "$T/tmp"
 if run "http://127.0.0.1:9" "$T/lint-ok"; then rc=0; else rc=$?; fi

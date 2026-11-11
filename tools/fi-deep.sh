@@ -118,13 +118,16 @@ TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
    - symptom：\`SYMPTOM:\` \`ROOT:\` \`FIX:\` \`VERIFY:\` \`RULE:\`（RULE 必填，寫拿掉專案名後仍成立的可泛化規則）
    - insight：\`CONTEXT:\` \`INSIGHT:\` \`IMPLICATION:\` \`QUERIES:\` \`RULE:\`
    - fixindex fi 回 INTAKE gate 時照它的提示補 RULE 再寫；回 JSON 的 \`created\`／\`appended\` 路徑記下編號。
-5. **報告**：寫 \`$R\`，格式固定：
+   - **SYMPTOM／CONTEXT 必須含一段逐字引用**：從 part 檔複製同一行內連續 ≥12 字的原文（報錯原文、指令輸出或使用者原話），用「原文：」標出；寫進條目的引用一字不改。part 檔找不到能佐證的原文，這個候選就略過，不憑印象補寫症狀。
+5. **報告**：寫 \`$R\`，格式固定（每個編號下一行是兩個空格開頭的「原文：」，內容與條目裡的引用相同）：
 
 \`\`\`
 ## 新增
 - <編號> <≤80 字核心>
+  原文：<從 part 檔逐字複製的同一段引用>
 ## 補充既有
 - <編號> <≤80 字核心>
+  原文：<從 part 檔逐字複製的同一段引用>
 ## 略過
 - <≤80 字核心> — <已存在 NNNN｜無重現價值｜一次性>
 ## status
@@ -148,15 +151,23 @@ TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
 
 ## 驗收
 
-預期：報告存在且四段齊全；報告列出的每個編號都查得到條目；fixindex 狀態乾淨。
+預期：報告存在且四段齊全；報告列出的每個編號都查得到條目；每個編號都有「原文：」引用，且引用同時出現在 part 檔與該條目；fixindex 狀態乾淨。
 
 \`\`\`bash
 set -eu
 R='$R'
+W='$W'
 test -s "\$R"
 for h in '## 新增' '## 補充既有' '## 略過' '## status'; do grep -qxF "\$h" "\$R"; done
 ids="\$(awk '/^## (新增|補充既有)\$/{f=1;next} /^## /{f=0} f && /^- [0-9]+ /{print \$2}' "\$R")"
 for id in \$ids; do fixindex show "\$id" >/dev/null; done
+awk '/^## (新增|補充既有)\$/{f=1;next} /^## /{f=0} f && /^- [0-9]+ /{id=\$2; n[id]=0} f && /^  原文：/{q=\$0; sub(/^  原文：/,"",q); print id "\t" q; n[id]++} END{for(i in n) if(!n[i]) print "MISSING\t" i}' "\$R" > "\$W/quotes.tsv"
+if grep '^MISSING' "\$W/quotes.tsv"; then echo "缺原文引用" >&2; exit 1; fi
+while IFS="\$(printf '\t')" read -r id q; do
+  [ "\$(printf '%s' "\$q" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')" -ge 12 ] || { echo "引用太短：\$id" >&2; exit 1; }
+  cat "\$W"/part.*.txt | grep -qF -- "\$q" || { echo "引用不在逐字稿：\$id" >&2; exit 1; }
+  fixindex show "\$id" | grep -qF -- "\$q" || { echo "引用不在條目：\$id" >&2; exit 1; }
+done < "\$W/quotes.tsv"
 echo "ids=\$(printf '%s ' \$ids)"
 fixindex status --json --assert-clean
 \`\`\`
