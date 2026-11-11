@@ -13,11 +13,12 @@ import fxsearch
 
 
 def test_slots_full_falls_back():
-    holder = ("import fcntl,os,sys,time\n"
-              "fds=[os.open(os.path.join(sys.argv[1],f'sem-slot-{i}'),os.O_CREAT|os.O_RDWR) for i in range(2)]\n"
-              "[fcntl.flock(f,fcntl.LOCK_EX) for f in fds]\n"
-              "print('held',flush=True); time.sleep(30)\n")
-    p = subprocess.Popen([sys.executable, '-c', holder, tmp], stdout=subprocess.PIPE, text=True)
+    # 用 _take_slot 本身佔滿名額：fcntl（POSIX）與 msvcrt（Windows）都測得到
+    holder = ("import sys,time; sys.path.insert(0,sys.argv[1]); import fxsearch\n"
+              "held=[fxsearch._take_slot() for _ in range(2)]\n"
+              "print('held' if all(held) else 'miss',flush=True); time.sleep(30)\n")
+    p = subprocess.Popen([sys.executable, '-c', holder, os.path.dirname(os.path.abspath(__file__))],
+                         stdout=subprocess.PIPE, text=True)
     try:
         assert p.stdout.readline().strip() == 'held'
         fxsearch._SEM_CACHE = None
