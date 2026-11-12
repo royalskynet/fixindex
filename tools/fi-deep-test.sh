@@ -70,6 +70,12 @@ chk "未脫敏中間檔已刪" "$(ls "$W"/raw.txt "$W"/masked.txt 2>/dev/null | 
 chk "工單列出 part 路徑" "$(grep -c "$W/part.01.txt" "$task")" "1"
 chk "工單含報告路徑" "$(grep -c "$W/report.md" "$task")" "2"
 chk "工單有驗收段" "$(grep -cx '## 驗收' "$task")" "1"
+chk "預設工單走 fi_pipeline.py" "$(grep -q 'fi_pipeline.py' "$task" && echo y)" "y"
+chk "預設工單不叫 agent 逐條寫" "$(grep -q '批次查重' "$task" && echo y)" ""
+TMPDIR="$T/tmp" FI_TASK_DIR="$T/tasks-agent" FI_MODE=agent FI_SCRUB_URL="$URL" FI_DEEP_LINT="$T/lint-ok" bash "$FD" "$T/s.jsonl" >"$T/out-agent" 2>&1
+atask="$(tail -n 1 "$T/out-agent" | cut -d' ' -f2)"
+chk "FI_MODE=agent 保留舊流程" "$(grep -q '批次查重' "$atask" && echo y)" "y"
+chk "兩種模式驗收段相同" "$(diff <(awk '/^## 驗收$/,0' "$task" | sed "s#$T/tmp/fi-deep-[^/']*#W#g") <(awk '/^## 驗收$/,0' "$atask" | sed "s#$T/tmp/fi-deep-[^/']*#W#g") >/dev/null && echo y)" "y"
 
 # 1b. 驗收段：引用必須逐字出現在 part 檔與條目（假 fixindex：show 印 $T/entry，status 回 0）
 mkdir -p "$T/bin"
