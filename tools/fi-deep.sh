@@ -5,6 +5,8 @@
 # 退出碼：0 工單已產且 lint 無 FAIL｜2 找不到 transcript｜3 PII scrub 失敗（fail-closed，不留任何產物）｜4 deep-lint FAIL
 set -eu
 
+MODE="${FI_MODE:-pipeline}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 J="${1:-}"
 if [ -z "$J" ]; then
   slug="$(pwd | sed 's#[/.]#-#g')"
@@ -108,6 +110,7 @@ TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
 {
   printf '# /fi：掃 session %s，記入 fixindex\n\n' "$sid8"
   printf '## 任務\n\n'
+  if [ "$MODE" = agent ]; then
   printf '逐塊、逐段讀完下列已脫敏的 session 精簡逐字稿（不抽樣）：\n\n'
   for p in "$W"/part.*.txt; do printf -- '- `%s`\n' "$p"; done
   cat <<EOF
@@ -141,6 +144,22 @@ TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
 \`\`\`
 
 沒有可記的就在「## 新增」下寫「- 無」，其餘段照列。
+EOF
+  else
+  cat <<EOF
+跑這支腳本（不要自己讀逐字稿、不要自己寫任何條目）：
+
+    python3 '$HERE/fi_pipeline.py' '$W'
+
+它會依序抽候選、查重、裁決、寫入，並產出報告 '$R'。逐字稿（已脫敏）：
+EOF
+  for p in "$W"/part.*.txt; do printf -- '- `%s`\n' "$p"; done
+  cat <<EOF
+
+腳本非 0 退出就停手，回報它的 stderr 末 20 行，不要自己補寫條目。
+EOF
+  fi
+  cat <<EOF
 
 ## 不動
 

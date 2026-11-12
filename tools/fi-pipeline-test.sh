@@ -42,7 +42,7 @@ elif 'STAGE=adjudicate' in q:
     inp = os.path.join(w, 'adjudicate.json')
     assert inp in q, 'adjudicate question must name the input file'
     shutil.copy(inp, os.path.join(w, 'seen-adjudicate.json'))
-    out.write('```\n{"i":0,"action":"write"}\n{"i":1,"action":"write"}\n{"i":3,"action":"write"}\n'
+    out.write('```\n{"i":"0","action":"write"}\n{"i":1,"action":"write"}\n{"i":3,"action":"write"}\n'
               '{"i":4,"action":"skip","reason":"同輪重複，併入 0"}\n```\n')
 PY
 chmod +x "$T/ask"

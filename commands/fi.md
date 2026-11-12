@@ -29,7 +29,7 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
    - 新增條目抽一兩條 `fixindex show <編號>` 看欄位是不是可搜尋關鍵字、RULE 是否可泛化；不合格就寫補單再派 deep，不自己改條目。
 4. **候選為空**：報告「## 新增」下是「- 無」→ 一句「本 session 無新的可記經驗」帶過。
 
-工單內容（窮舉候選、逐條 `fixindex find`／`insights` 查重、收斂、`printf … | fixindex fi` 寫入、報告格式、驗收）由 `fi-deep.sh` 產生，改流程就改腳本與 `tools/fi-deep-test.sh`，不在這裡另寫一份。
+工單預設（`FI_MODE=pipeline`）只叫 deep 跑 `tools/fi_pipeline.py`：一次 LLM 抽候選 → 機械過濾（引用、RULE）→ 一次批次查重 → 一次 LLM 裁決（含同輪去重）→ 逐條寫入 → 報告。LLM 兩段走 ds-claude 的 `ds-run.sh --ask`，prompt 在 `tools/fi-prompts/`。pipeline 失敗時改跑 `FI_MODE=agent bash ~/dev/fixindex/tools/fi-deep.sh` 產舊版逐條工單。改流程就改腳本、prompt 與 `tools/fi-deep-test.sh`／`tools/fi-pipeline-test.sh`，不在這裡另寫一份。
 
 ## 欄位（工單已附，供核對）
 
