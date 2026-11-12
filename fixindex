@@ -1823,7 +1823,19 @@ main() {
                if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_new "$@"; else sync_pull; cmd_new "$@"; fi ;;
     doctor)    warn_if_default_dir
                if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then cmd_doctor "$@"; else sync_pull; cmd_doctor "$@"; fi ;;
-    status)    warn_if_default_dir; _cmd_status_fxstatus "$@" ;;
+    status)    warn_if_default_dir
+               # set -e 下 0 匹配的 grep -c 會讓「$(... | grep -c)」賦值直接中止 status；先關 set -e（只看最後一次退出碼）
+               set +e; _st_out=$(_cmd_status_fxstatus "$@"); _rc=$?; [[ -n "$_st_out" ]] || _st_out="(no output)"
+               printf '%s\n' "$_st_out"
+               # ponytail: 人類可讀輸出尾行補一行 JSON（{"ok": true, "errors": N}），
+               # 讓 `fixindex status | grep -q '"ok": true'` 這類驗收成立；errors 由已印的
+               # ERROR／LINT FAIL 行數推得。要完整欄位請用 --json（不補此行）。
+               if [[ " $* " != *" --json "* && " $* " != *" --assert-clean "* ]]; then
+                 _e=$(printf '%s\n' "$_st_out" | grep -cE '(^|[[:space:]])(ERROR|LINT FAIL)')
+                 if [[ $_e -gt 0 ]]; then _ok=false; else _ok=true; fi
+                 printf '{"ok": %s, "errors": %s}\n' "${_ok:-true}" "${_e:-0}"
+               fi
+               exit $_rc ;;
     # 手改條目後 re-index 是既定追加流程（fix 0208），只推索引會讓條目改動永遠留在工作樹（2026-09-30）
     re-index)  warn_if_default_dir; sync_pull; cmd_re_index
                sync_push "$INDEX_FILE" $(git -C "$FIXDIR" ls-files -m -d -o --exclude-standard -- '*.md' 2>/dev/null | sort -u | sed "s#^#$FIXDIR/#") ;;
