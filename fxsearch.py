@@ -235,28 +235,40 @@ def _normalize(pairs):
 
 
 def _entry_matrix(model, np, raws):
-    """條目向量存磁碟，內容沒變就不重算（重算全部條目是記憶體峰值的大頭）。"""
+    """條目向量存磁碟，逐條各自 hash：只有改動的那幾條重算。
+
+    舊版拿「全庫內容的 sha」當單一 key，寫入任何一條就整份失效 —— /fi 一輪
+    寫十幾條，每寫一條下一次 find 就要重算全庫（實測 8.7–16s vs 命中 4.4s）。"""
     import hashlib
-    key = hashlib.sha1((SEMANTIC_MODEL + '\0' + '\0'.join(raws)).encode()).hexdigest()
+    hashes = [hashlib.sha1(r.encode()).hexdigest() for r in raws]
     path = os.path.join(_cache_dir(), 'emb-' + re.sub(r'\W', '_', SEMANTIC_MODEL) + '.npz')
+    cached = {}
     try:
         with np.load(path) as z:
-            if str(z['key']) == key:
-                return z['mat']
+            old_keys = [str(k) for k in z['keys']]
+            old_mat = z['mat']
+            if len(old_keys) == len(old_mat):
+                cached = {k: old_mat[i] for i, k in enumerate(old_keys)}
     except Exception:
-        pass
-    mat = model.encode(raws, show_progress_bar=False)
-    # 空 section 會編出零向量。除以 (norm + eps) 不夠 —— 那是 0/1e-9，
-    # 後續 matmul 仍會踩到 divide-by-zero / overflow。零向量要原樣留著。
-    norms = np.linalg.norm(mat, axis=1, keepdims=True)
-    mat = (mat / np.where(norms < 1e-9, 1.0, norms)).astype(np.float32)
-    try:
-        os.makedirs(_cache_dir(), exist_ok=True)
-        tmp = path + f'.{os.getpid()}.tmp.npz'
-        np.savez(tmp, key=np.array(key), mat=mat)
-        os.replace(tmp, path)
-    except OSError:
-        pass
+        pass  # 不存在、或還是舊的單一 key 格式 —— 當作全空，這一次全算
+    missing = sorted({h: i for i, h in enumerate(hashes) if h not in cached}.values())
+    if missing:
+        new = model.encode([raws[i] for i in missing], show_progress_bar=False)
+        # 空 section 會編出零向量。除以 (norm + eps) 不夠 —— 那是 0/1e-9，
+        # 後續 matmul 仍會踩到 divide-by-zero / overflow。零向量要原樣留著。
+        norms = np.linalg.norm(new, axis=1, keepdims=True)
+        new = (new / np.where(norms < 1e-9, 1.0, norms)).astype(np.float32)
+        for j, i in enumerate(missing):
+            cached[hashes[i]] = new[j]
+    mat = np.stack([cached[h] for h in hashes]).astype(np.float32) if hashes else np.zeros((0, 1), np.float32)
+    if missing:
+        try:
+            os.makedirs(_cache_dir(), exist_ok=True)
+            tmp = path + f'.{os.getpid()}.tmp.npz'
+            np.savez(tmp, keys=np.array(hashes), mat=mat)
+            os.replace(tmp, path)
+        except OSError:
+            pass
     return mat
 
 
@@ -415,49 +427,8 @@ def _badge(state):
     return f'[{b}]'
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("usage: fxsearch.py <query> [--limit N] [--all] [--json] [--type defect|insight]", file=sys.stderr)
-        sys.exit(1)
-    # Walk flags before positional
-    args = sys.argv[1:]
-    limit = 8
-    json_out = False
-    # --spill：兩段式注入（借鏡 MCP resource_link）。預設仍回全文，呼叫端加了才只回 ID＋首行。
-    spill = False
-    etype = None
-    q = None
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == '--json':
-            json_out = True
-        elif a == '--limit' and i+1 < len(args):
-            limit = int(args[i+1])
-            i += 1
-        elif a == '--type' and i+1 < len(args):
-            etype = args[i+1]
-            i += 1
-        elif a == '--spill':
-            spill = True
-        elif not a.startswith('--'):
-            if q is None:
-                q = a
-        i += 1
-    if q is None:
-        print("usage: fxsearch.py <query> [--limit N] [--json] [--type defect|insight]", file=sys.stderr)
-        sys.exit(1)
-    fixdir = os.environ.get('FIXINDEX_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixes')
-    entries = build_entries(fixdir)
-    if etype:
-        entries = [e for e in entries if e['type'] == etype]
-    if not entries:
-        if json_out:
-            print(json.dumps({'query': q, 'hits': []}))
-        else:
-            print("(no entries)")
-        return
-    bm = BM25Engine(entries)
+def _top_for_query(bm, entries, q, limit):
+    """單一 query 的完整排序流程，回傳 (top, matched_sections)。"""
     results = search_hybrid(bm, entries, q, limit=limit)
     # ponytail: superseded files keep showing (content is still true) but at half score,
     # so the live entry that absorbed them wins the tie.
@@ -477,15 +448,75 @@ def main():
         top.append((e, s))
         if len(top) >= limit:
             break
+    return top, len(results)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: fxsearch.py <query>... [--limit N] [--all] [--json] [--type defect|insight]", file=sys.stderr)
+        sys.exit(1)
+    # Walk flags before positional
+    args = sys.argv[1:]
+    limit = 8
+    json_out = False
+    # --spill：兩段式注入（借鏡 MCP resource_link）。預設仍回全文，呼叫端加了才只回 ID＋首行。
+    spill = False
+    etype = None
+    # 多 query：一次呼叫查完整批（/fi 查重一條一條跑，每回合重載模型與索引）。
+    queries = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '--json':
+            json_out = True
+        elif a == '--limit' and i+1 < len(args):
+            limit = int(args[i+1])
+            i += 1
+        elif a == '--type' and i+1 < len(args):
+            etype = args[i+1]
+            i += 1
+        elif a == '--queries-file' and i+1 < len(args):
+            with open(args[i+1]) as f:
+                queries.extend(ln.strip() for ln in f if ln.strip())
+            i += 1
+        elif a == '--spill':
+            spill = True
+        elif not a.startswith('--'):
+            queries.append(a)
+        i += 1
+    if not queries:
+        print("usage: fxsearch.py <query>... [--queries-file F] [--limit N] [--json] [--type defect|insight]", file=sys.stderr)
+        sys.exit(1)
+    q = queries[0]
+    fixdir = os.environ.get('FIXINDEX_DIR') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixes')
+    entries = build_entries(fixdir)
+    if etype:
+        entries = [e for e in entries if e['type'] == etype]
+    if not entries:
+        if json_out:
+            print(json.dumps({'query': q, 'hits': []}))
+        else:
+            print("(no entries)")
+        return
+    bm = BM25Engine(entries)
+    per_query = [(qq,) + _top_for_query(bm, entries, qq, limit) for qq in queries]
     if json_out:
-        hits = [{'key': e['key'], 'file': e['file'], 'section': e['section'],
-                 'heading': e['heading'], 'score': round(s, 3),
-                 'title': e['title'], 'rule': e['rule'],
-                 'trust_state': 'superseded' if e['superseded'] else e['trust_state'],
-                 'last_verified': e['last_verified'],
-                 'outcome': e['outcome']} for e, s in top]
-        print(json.dumps({'query': q, 'hits': hits}, ensure_ascii=False))
-    else:
+        def _pack(top):
+            return [{'key': e['key'], 'file': e['file'], 'section': e['section'],
+                     'heading': e['heading'], 'score': round(s, 3),
+                     'title': e['title'], 'rule': e['rule'],
+                     'trust_state': 'superseded' if e['superseded'] else e['trust_state'],
+                     'last_verified': e['last_verified'],
+                     'outcome': e['outcome']} for e, s in top]
+        if len(per_query) == 1:
+            print(json.dumps({'query': q, 'hits': _pack(per_query[0][1])}, ensure_ascii=False))
+        else:
+            print(json.dumps({'queries': [{'query': qq, 'hits': _pack(top)}
+                                          for qq, top, _ in per_query]}, ensure_ascii=False))
+        return
+    for qq, top, matched in per_query:
+        if len(per_query) > 1:
+            print(f"## query: {qq}")
         for e, s in top:
             mark = " [ext]" if e['type'] == 'external' else ""
             badge = _badge('superseded' if e['superseded'] else e['trust_state'])
@@ -495,9 +526,9 @@ def main():
             else:
                 print(f"  {e['key']:<8} {badge} {e['section']:<5} ({s:4.2f}){mark}  {e['heading']}")
         if spill:
-            print(f"\nmatched {len(results)} sections; showing top {len(top)}（概略模式：fixindex show <file> 取全文）")
+            print(f"\nmatched {matched} sections; showing top {len(top)}（概略模式：fixindex show <file> 取全文）")
         else:
-            print(f"\nmatched {len(results)} sections; showing top {len(top)}")
+            print(f"\nmatched {matched} sections; showing top {len(top)}")
 
 
 if __name__ == '__main__':

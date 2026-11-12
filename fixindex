@@ -184,7 +184,8 @@ cmd_help() {
 fixindex — symptom→fix lookup for personal bug runbook
 
 Commands:
-  fixindex find <keyword>       BM25 + contextual blurb 語意排序（fxsearch）；--spill 只回 ID／檔名／標題
+  fixindex find <keyword>...    BM25 + contextual blurb 語意排序（fxsearch）；--spill 只回 ID／檔名／標題
+                                多個 keyword 或 --queries-file F 一次查完（模型與索引只載一次）
   fixindex insights <topic>     find 限 type: insight（設計決策/可轉移洞見）；plan 起點按主題提取
   fixindex insights             無參數：列出全部 insight 條目
   fixindex externals [topic]    find 限 type: external（外部情報/未經本機驗證的坑）；無參數列出全部

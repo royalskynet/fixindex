@@ -43,8 +43,9 @@ def test_entry_cache_skips_reencode():
     first = Fake.calls
     fxsearch._entry_matrix(m, np, raws)
     assert Fake.calls == first, 'cache hit still re-encoded entries'
+    # 2026-11-12：快取改逐條 hash，新增一條只重算那一條（舊版整庫失效，這裡原本斷言 +4）
     fxsearch._entry_matrix(m, np, raws + ['d'])
-    assert Fake.calls == first + 4, 'changed entries must invalidate cache'
+    assert Fake.calls == first + 1, 'new entry must re-encode only itself'
 
 
 if __name__ == '__main__':
