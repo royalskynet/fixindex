@@ -77,7 +77,10 @@ printf '#!/bin/sh\n[ "$1" = show ] && cat "%s/entry"\nexit 0\n' "$T" > "$T/bin/f
 awk '/^```bash$/{f=1;next} /^```$/{f=0} f' "$task" > "$T/accept.sh"
 Q='dcq_busy_test 斷言修好了'
 rep() { { printf '## 新增\n- 12345 測試條目\n'; [ -n "$1" ] && printf '  原文：%s\n' "$1"; printf '## 補充既有\n## 略過\n## status\n{}\n'; } > "$W/report.md"; }
-acc() { PATH="$T/bin:$PATH" bash "$T/accept.sh" >/dev/null 2>&1 && echo 0 || echo 1; }
+# 同輪去重檢查讀真實條目檔，所以假 store 也要有對應的 md（與假 fixindex show 同一個 id）
+mkdir -p "$T/fixes"
+printf -- '---\nid: 12345\ntitle: 測試條目\n---\n\n## §1 Symptom\n\n內文\n' > "$T/fixes/12345-test.md"
+acc() { PATH="$T/bin:$PATH" FIXINDEX_DIR="$T/fixes" bash "$T/accept.sh" >/dev/null 2>&1 && echo 0 || echo 1; }
 printf 'SYMPTOM: 原文：%s\n' "$Q" > "$T/entry"
 rep "$Q"; chk "引用在逐字稿與條目 → 過" "$(acc)" "0"
 rep "";   chk "缺原文 → 擋" "$(acc)" "1"
@@ -87,6 +90,16 @@ printf 'SYMPTOM: 改寫過的症狀\n' > "$T/entry"; rep "$Q"
 chk "條目沒放引用 → 擋" "$(acc)" "1"
 rep "斷言修好了"; printf 'SYMPTOM: 斷言修好了\n' > "$T/entry"
 chk "引用太短 → 擋" "$(acc)" "1"
+
+# 1c. 同輪去重：一輪寫兩條同主題（2026-11-12 一輪 17 條只有 6 個主題），驗收要擋
+printf -- '---\nid: 12346\ntitle: 測試條目\n---\n\n## §1 Symptom\n\n內文\n' > "$T/fixes/12346-test.md"
+printf 'SYMPTOM: 原文：%s\n' "$Q" > "$T/entry"
+{ printf '## 新增\n- 12345 測試條目\n  原文：%s\n- 12346 測試條目\n  原文：%s\n' "$Q" "$Q"
+  printf '## 補充既有\n## 略過\n## status\n{}\n'; } > "$W/report.md"
+chk "同輪同主題兩條 → 擋" "$(acc)" "1"
+printf -- '---\nid: 12346\ntitle: 完全無關的另一個根因 launchctl 服務目標\n---\n\n## §1 Symptom\n\n內文\n' > "$T/fixes/12346-test.md"
+chk "同輪不同主題兩條 → 過" "$(acc)" "0"
+rm -f "$T/fixes/12346-test.md"
 
 # 2. scrub 不通：fail-closed，不留工單與工作目錄
 rm -rf "$T/tmp" "$T/tasks"; mkdir -p "$T/tmp"

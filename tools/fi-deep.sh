@@ -19,6 +19,7 @@ LINT="${FI_DEEP_LINT:-deep-lint}"
 CHUNK="${FI_CHUNK_BYTES:-140000}"
 ALLOWF="${FI_SCRUB_ALLOW:-$(cd "$(dirname "$0")" && pwd)/fi-scrub-allow.txt}"
 STORE="${FIXINDEX_DIR:-$HOME/dev/fix-store/fixes}"
+DUPCHK="${FI_DUP_CHECK:-$(cd "$(dirname "$0")" && pwd)/fi-dup-check.py}"
 DEEP_CWD="$(dirname "$STORE")"
 
 sid="$(basename "$J" .jsonl)"
@@ -112,8 +113,13 @@ TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
   cat <<EOF
 
 1. **窮舉候選**：每段改動、每條報錯、每個重新摸索才搞懂的點，含糾正誤解。出過錯、查到根因、改了做法的點至少列進候選。
-2. **逐條查重**：每個候選跑 \`fixindex find "<核心關鍵字>"\` 與 \`fixindex insights "<主題>"\`。
-3. **收斂**：濾掉一次性、只對單一專案有意義、無重現價值的；只留「下次 \`fixindex find\` 找得到才有意義」的。已存在且等效的不重記。
+2. **批次查重（一次查完，不要一條一條跑）**：把每個候選的核心關鍵字一行一個寫進 \`$W/queries.txt\`，
+   然後只跑這兩條：\`fixindex find --queries-file $W/queries.txt --limit 5 --spill\` 與
+   \`fixindex insights --queries-file $W/queries.txt --limit 5 --spill\`。
+   模型與索引只載一次；逐條跑會讓這一步從 1 回合變成 N 回合。
+3. **收斂（含同輪去重）**：濾掉一次性、只對單一專案有意義、無重現價值的；只留「下次 \`fixindex find\` 找得到才有意義」的。已存在且等效的不重記。
+   **寫入前把全部候選攤在一起兩兩比一次**：同一個根因、同一條規則的候選合併成一條，不要同主題寫兩三條。
+   查重只看得到庫裡既有的條目，看不到你這一輪剛寫的，所以同輪重複只能在這一步擋掉。
 4. **寫入**：每條通過的用 \`printf '…' | fixindex fi\`（不帶任何參數）寫入。欄位值寫可搜尋關鍵字：
    - symptom：\`SYMPTOM:\` \`ROOT:\` \`FIX:\` \`VERIFY:\` \`RULE:\`（RULE 必填，寫拿掉專案名後仍成立的可泛化規則）
    - insight：\`CONTEXT:\` \`INSIGHT:\` \`IMPLICATION:\` \`QUERIES:\` \`RULE:\`
@@ -151,7 +157,7 @@ TASK="$TASKS/$(date +%Y-%m-%d)-fi-$sid8.md"
 
 ## 驗收
 
-預期：報告存在且四段齊全；報告列出的每個編號都查得到條目；每個編號都有「原文：」引用，且引用同時出現在 part 檔與該條目；fixindex 狀態乾淨。
+預期：報告存在且四段齊全；報告列出的每個編號都查得到條目；每個編號都有「原文：」引用，且引用同時出現在 part 檔與該條目；本輪新增的條目彼此沒有同主題重複；fixindex 狀態乾淨。
 
 \`\`\`bash
 set -eu
@@ -169,6 +175,8 @@ while IFS="\$(printf '\t')" read -r id q; do
   fixindex show "\$id" | grep -qF -- "\$q" || { echo "引用不在條目：\$id" >&2; exit 1; }
 done < "\$W/quotes.tsv"
 echo "ids=\$(printf '%s ' \$ids)"
+newids="\$(awk '/^## 新增\$/{f=1;next} /^## /{f=0} f && /^- [0-9]+ /{print \$2}' "\$R")"
+[ -z "\$newids" ] || python3 '$DUPCHK' \$newids
 fixindex status --json --assert-clean
 \`\`\`
 EOF
