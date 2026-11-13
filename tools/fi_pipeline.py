@@ -201,7 +201,8 @@ def main():
         with open(adjudicate_path, 'w', encoding='utf-8') as fh:
             json.dump(payload, fh, ensure_ascii=False)
         with open(os.path.join(prompts, 'adjudicate.md'), encoding='utf-8') as fh:
-            adjudicate_question = fh.read().replace('{INPUT}', os.path.abspath(adjudicate_path))
+            # 相對 W 的路徑：opencode 對 W 外的絕對路徑會 auto-reject（external_directory）
+            adjudicate_question = fh.read().replace('{INPUT}', 'adjudicate.json')
         answer = ask(adjudicate_question)
         if answer is None:
             return 3
