@@ -9,7 +9,7 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
 1. **insight** — 已固化的設計洞見／架構決策／跨案模式：改方式比記解法有價值、別的專案也用得到。
 2. **symptom**（一般 defect 條目）— 症狀→根因→解法→驗證：會重複撞到、下次 `fixindex find "<關鍵字>"` 找得到。
 
-## 程序（2026-11-09 起：掃描、收斂、寫入全派 deep，不派 Claude 子代理）
+## 程序（掃描、收斂、寫入全派 deep，不派 Claude 子代理）
 
 主 session 只做三件事：跑 `fi-deep` 產工單、裸名派 `deep-run`、收件重驗。
 
