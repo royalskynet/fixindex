@@ -47,7 +47,7 @@ URL="http://127.0.0.1:$(cat "$T/port")"
 printf '#!/bin/sh\necho "LINT OK"\n' > "$T/lint-ok"; chmod +x "$T/lint-ok"
 printf '#!/bin/sh\necho "LINT FAIL: 測試"\nexit 1\n' > "$T/lint-fail"; chmod +x "$T/lint-fail"
 
-run() { TMPDIR="$T/tmp" FI_TASK_DIR="$T/tasks" FI_SCRUB_URL="$1" FI_DEEP_LINT="$2" bash "$FD" "${3:-$T/s.jsonl}" >"$T/out" 2>"$T/err"; }
+run() { FI_STATE_DIR="$T/state" TMPDIR="$T/tmp" FI_TASK_DIR="$T/tasks" FI_SCRUB_URL="$1" FI_DEEP_LINT="$2" bash "$FD" "${3:-$T/s.jsonl}" >"$T/out" 2>"$T/err"; }
 mkdir -p "$T/tmp"
 
 # 1. 正常
@@ -72,7 +72,7 @@ chk "工單含報告路徑" "$(grep -c "$W/report.md" "$task")" "2"
 chk "工單有驗收段" "$(grep -cx '## 驗收' "$task")" "1"
 chk "預設工單走 fi_pipeline.py" "$(grep -q 'fi_pipeline.py' "$task" && echo y)" "y"
 chk "預設工單不叫 agent 逐條寫" "$(grep -q '批次查重' "$task" && echo y)" ""
-TMPDIR="$T/tmp" FI_TASK_DIR="$T/tasks-agent" FI_MODE=agent FI_SCRUB_URL="$URL" FI_DEEP_LINT="$T/lint-ok" bash "$FD" "$T/s.jsonl" >"$T/out-agent" 2>&1
+FI_STATE_DIR="$T/state" TMPDIR="$T/tmp" FI_TASK_DIR="$T/tasks-agent" FI_MODE=agent FI_SCRUB_URL="$URL" FI_DEEP_LINT="$T/lint-ok" bash "$FD" "$T/s.jsonl" >"$T/out-agent" 2>&1
 atask="$(tail -n 1 "$T/out-agent" | cut -d' ' -f2)"
 chk "FI_MODE=agent 保留舊流程" "$(grep -q '批次查重' "$atask" && echo y)" "y"
 chk "兩種模式驗收段相同" "$(diff <(awk '/^## 驗收$/,0' "$task" | sed "s#$T/tmp/fi-deep-[^/']*#W#g") <(awk '/^## 驗收$/,0' "$atask" | sed "s#$T/tmp/fi-deep-[^/']*#W#g") >/dev/null && echo y)" "y"
@@ -122,5 +122,26 @@ chk "lint FAIL rc" "$rc" "4"
 # 4. 缺 transcript
 if run "$URL" "$T/lint-ok" "$T/none.jsonl"; then rc=0; else rc=$?; fi
 chk "缺 transcript rc" "$rc" "2"
+
+# 5. 增量：只掃標記之後的行；標記等於總行數 → rc=5；FI_FULL=1 重掃
+sid="$(basename "$T/s.jsonl" .jsonl)"; mkdir -p "$T/state"
+rm -rf "$T/tmp"; mkdir -p "$T/tmp"
+echo 1 > "$T/state/$sid"
+if run "$URL" "$T/lint-ok"; then rc=0; else rc=$?; fi
+chk "增量 rc" "$rc" "0"
+W="$(ls -d "$T/tmp"/fi-deep-* | head -1)"
+chk "增量不含已掃的第 1 行" "$(cat "$W"/part.*.txt | grep -c '轉帳')" "0"
+chk "增量含第 2 行" "$(cat "$W"/part.*.txt | grep -c 'dcq_busy_test')" "1"
+chk "mark 記標記檔與總行數" "$(cat "$W/mark")" "$(printf '%s\t2' "$T/state/$sid")"
+chk "fi-deep 自己不前移標記" "$(cat "$T/state/$sid")" "1"
+echo 2 > "$T/state/$sid"; rm -rf "$T/tmp"; mkdir -p "$T/tmp"
+if run "$URL" "$T/lint-ok"; then rc=0; else rc=$?; fi
+chk "無新內容 rc" "$rc" "5"
+chk "無新內容不留工作目錄" "$(ls "$T/tmp" | wc -l | tr -d ' ')" "0"
+if FI_FULL=1 run "$URL" "$T/lint-ok"; then rc=0; else rc=$?; fi
+chk "FI_FULL=1 重掃 rc" "$rc" "0"
+echo 9 > "$T/state/$sid"; rm -rf "$T/tmp"; mkdir -p "$T/tmp"
+if run "$URL" "$T/lint-ok"; then rc=0; else rc=$?; fi
+chk "標記超過總行數（檔被換掉）→ 從頭掃" "$(cat "$(ls -d "$T/tmp"/fi-deep-* | head -1)"/part.*.txt | grep -c '轉帳')" "1"
 
 exit "$fail"

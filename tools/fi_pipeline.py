@@ -105,33 +105,35 @@ def main():
             return None
         return text
 
-    # 1. 抽候選
-    with open(os.path.join(prompts, 'extract.md'), encoding='utf-8') as fh:
-        extract_question = fh.read()
-    text = ask(extract_question)
-    if text is None:
-        return 3
-
-    candidates = []
-    for line in text.splitlines():
-        s = line.strip()
-        if not s.startswith('{'):
-            continue
-        try:
-            obj = json.loads(s)
-        except Exception:
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if 'kind' not in obj or 'quote' not in obj or 'fields' not in obj:
-            continue
-        obj['i'] = len(candidates)
-        candidates.append(obj)
-
+    part_paths = sorted(glob.glob(os.path.join(w, 'part.*.txt')))
     part_texts = []
-    for path in sorted(glob.glob(os.path.join(w, 'part.*.txt'))):
+    for path in part_paths:
         with open(path, encoding='utf-8') as fh:
             part_texts.append(fh.read())
+
+    # 1. 抽候選：每塊各問一次。一次塞整個 session 時 flash 只讀前段，後段的經驗會漏掉
+    with open(os.path.join(prompts, 'extract.md'), encoding='utf-8') as fh:
+        extract_template = fh.read()
+    candidates = []
+    for path in part_paths:
+        # 相對 W 的路徑：opencode 對 W 外的絕對路徑會 auto-reject（external_directory）
+        text = ask(extract_template.replace('{PART}', os.path.basename(path)))
+        if text is None:
+            return 3
+        for line in text.splitlines():
+            s = line.strip()
+            if not s.startswith('{'):
+                continue
+            try:
+                obj = json.loads(s)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if 'kind' not in obj or 'quote' not in obj or 'fields' not in obj:
+                continue
+            obj['i'] = len(candidates)
+            candidates.append(obj)
 
     # 2. 機械過濾
     passed = []
@@ -312,8 +314,22 @@ def main():
     with open(report_path, 'w', encoding='utf-8') as fh:
         fh.write(body)
 
+    if not failed:
+        commit_mark(w)
     print(report_path)
     return 4 if failed else 0
+
+
+def commit_mark(w):
+    """fi-deep.sh 寫的 <W>/mark＝「標記檔<TAB>已處理行數」；全部寫完才前移，下次 /fi 只掃新增部分。"""
+    try:
+        with open(os.path.join(w, 'mark'), encoding='utf-8') as fh:
+            path, lines = fh.read().strip().split('\t')
+    except (FileNotFoundError, ValueError):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write(lines + '\n')
 
 
 if __name__ == '__main__':

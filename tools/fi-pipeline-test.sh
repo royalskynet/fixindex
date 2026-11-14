@@ -129,4 +129,17 @@ chk "無候選不叫裁決" "$(grep -c adjudicate "$C/log")" "0"
 chk "無候選不寫 fixindex" "$(ls "$C/d"/fi-in-* 2>/dev/null | wc -l | tr -d ' ')" "0"
 chk "無候選報告寫 - 無" "$(awk '/^## 新增$/{f=1;next} /^## /{f=0} f' "$C/W/report.md" 2>/dev/null | grep -cx -- '- 無')" "1"
 
+# 4. 多塊：每塊各抽一次；成功後前移標記
+C="$T/c4"; setup "$C"; printf '%s\n' "第二塊沒有候選" > "$C/W/part.02.txt"
+printf '%s\t42\n' "$C/state/sid" > "$C/W/mark"
+if runp "$C"; then rc=0; else rc=$?; fi
+chk "多塊 rc" "$rc" "0"
+chk "多塊各抽一次" "$(grep -c '^extract' "$C/log")" "2"
+chk "成功後前移標記" "$(cat "$C/state/sid" 2>/dev/null)" "42"
+
+# 5. LLM 失敗不前移標記
+C="$T/c5"; setup "$C"; printf '%s\t42\n' "$C/state/sid" > "$C/W/mark"
+runp "$C" FAKE_ASK_FAIL=1 || true
+chk "失敗不前移標記" "$([ -e "$C/state/sid" ] && echo y)" ""
+
 exit $fail

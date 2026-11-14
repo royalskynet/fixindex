@@ -2,7 +2,7 @@
 # fi-deep — /fi 的 deep 派工準備：抽 transcript → 遮罩 → Presidio scrub → 切塊 → 產 deep 工單 → deep-lint。
 # 用法：fi-deep [session.jsonl]（省略＝cwd 對應專案目錄裡最新的 jsonl）
 # 成功時最後一行印「deep-run <工單> <cwd>」，主 session 照抄裸名呼叫（deep-run 不能從腳本內呼叫，會掉回沙箱）。
-# 退出碼：0 工單已產且 lint 無 FAIL｜2 找不到 transcript｜3 PII scrub 失敗（fail-closed，不留任何產物）｜4 deep-lint FAIL
+# 退出碼：0 工單已產且 lint 無 FAIL｜2 找不到 transcript｜3 PII scrub 失敗（fail-closed，不留任何產物）｜4 deep-lint FAIL｜5 上次 /fi 後沒有新內容
 set -eu
 
 MODE="${FI_MODE:-pipeline}"
@@ -26,17 +26,32 @@ DEEP_CWD="$(dirname "$STORE")"
 
 sid="$(basename "$J" .jsonl)"
 sid8="$(printf '%s' "$sid" | cut -c1-8)"
+
+# 增量：只掃上次 /fi 成功後新增的行。標記在 pipeline 成功寫完才前移（fi_pipeline.py 讀 $W/mark）；FI_FULL=1 重掃全檔
+STATE="${FI_STATE_DIR:-$HOME/.local/state/fixindex/fi-mark}"
+MARK="$STATE/$sid"
+L="$(wc -l < "$J" | tr -d ' ')"
+N=0
+[ "${FI_FULL:-0}" = 1 ] || N="$(cat "$MARK" 2>/dev/null || echo 0)"
+case "$N" in ''|*[!0-9]*) N=0 ;; esac
+[ "$N" -le "$L" ] || N=0
+if [ "$N" -ge "$L" ]; then
+  echo "fi-deep: 自上次 /fi（第 $N 行）起沒有新內容" >&2
+  exit 5
+fi
+
 W="$(mktemp -d "${TMPDIR:-/tmp}/fi-deep-$sid8.XXXXXX")"
 ok=0
 # 未脫敏的中間檔一律不留；失敗時整個工作目錄清掉
 trap 'rm -f "$W/raw.txt" "$W/masked.txt"; [ "$ok" = 1 ] || rm -rf "$W"' EXIT
+printf '%s\t%s\n' "$MARK" "$L" > "$W/mark"
 
-jq -r 'select(.type=="user" or .type=="assistant") | .message.content |
+sed -n "$((N + 1)),${L}p" "$J" | jq -r 'select(.type=="user" or .type=="assistant") | .message.content |
   if type=="array" then (map(
     if .type=="text" then .text
     elif .type=="tool_use" then "TOOL "+.name+" "+((.input|tostring)[0:300])
     elif .type=="tool_result" then "RESULT "+((.content|tostring)[0:600])
-    else empty end)|join("\n")) else tostring end' "$J" > "$W/raw.txt"
+    else empty end)|join("\n")) else tostring end' > "$W/raw.txt"
 node "$MASK" "$W/raw.txt" "$W/masked.txt" >/dev/null
 rm -f "$W/raw.txt"
 
