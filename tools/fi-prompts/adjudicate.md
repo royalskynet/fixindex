@@ -1,5 +1,5 @@
 STAGE=adjudicate
-讀 {INPUT}。不要建立、修改或刪除任何檔案。
+只讀 {INPUT} 這一個檔，不跑其他指令、不讀其他檔（fixindex 條目庫在工作目錄外，讀取會被拒絕而整題失敗）。查重資訊全在 hits 裡，只憑 hits 裁決。不要建立、修改或刪除任何檔案。
 
 它是一個 JSON 陣列，每個元素是一個候選：i（編號）、kind、core、quote、fields，以及 hits（fixindex 既有條目的查重結果：key、file、title、score）。
 
