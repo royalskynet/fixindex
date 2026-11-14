@@ -140,6 +140,8 @@ chk "無新內容 rc" "$rc" "5"
 chk "無新內容不留工作目錄" "$(ls "$T/tmp" | wc -l | tr -d ' ')" "0"
 if FI_FULL=1 run "$URL" "$T/lint-ok"; then rc=0; else rc=$?; fi
 chk "FI_FULL=1 重掃 rc" "$rc" "0"
+if FI_STATE_DIR="$T/state" TMPDIR="$T/tmp" FI_TASK_DIR="$T/tasks" FI_SCRUB_URL="$URL" FI_DEEP_LINT="$T/lint-ok" bash "$HERE/fi-run.sh" "$T/s.jsonl" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+chk "fi-run 無新內容傳回 rc=5" "$rc" "5"
 echo 9 > "$T/state/$sid"; rm -rf "$T/tmp"; mkdir -p "$T/tmp"
 if run "$URL" "$T/lint-ok"; then rc=0; else rc=$?; fi
 chk "標記超過總行數（檔被換掉）→ 從頭掃" "$(cat "$(ls -d "$T/tmp"/fi-deep-* | head -1)"/part.*.txt | grep -c '轉帳')" "1"

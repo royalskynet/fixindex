@@ -9,27 +9,22 @@ description: 掃描當次 session，挖出值得增補 fixindex 的 insights（�
 1. **insight** — 已固化的設計洞見／架構決策／跨案模式：改方式比記解法有價值、別的專案也用得到。
 2. **symptom**（一般 defect 條目）— 症狀→根因→解法→驗證：會重複撞到、下次 `fixindex find "<關鍵字>"` 找得到。
 
-## 程序（掃描、收斂、寫入全派 deep，不派 Claude 子代理）
+## 程序（主 session 只跑一條指令，不讀逐字稿、不派 deep、不派 Claude 子代理）
 
-主 session 只做三件事：跑 `fi-deep` 產工單、裸名派 `deep-run`、收件重驗。
+```bash
+bash ~/dev/fixindex/tools/fi-run.sh <本 session jsonl 絕對路徑>
+```
 
-1. **產工單**（抽 transcript → 遮罩 → Presidio scrub → 切塊 → 產 deep 工單 → deep-lint，全在腳本內）：
+用 `run_in_background: true` 跑，完成通知到了只讀輸出末尾，照轉述新增（編號＋核心）、補充、略過。不另跑 `fixindex show` 抽查、不重讀報告或 part 檔。
 
-   ```bash
-   bash ~/dev/fixindex/tools/fi-deep.sh            # 或帶 session jsonl 絕對路徑
-   ```
+- 腳本內含：增量抽 transcript（只取上次 /fi 之後的行）→ 遮罩 → Presidio scrub → 切塊 → `fi_pipeline.py`（每塊一次 flash 抽候選 → 機械過濾引用與 RULE → 一次批次查重 → 一次 flash 裁決含同輪去重 → 寫入）→ 工單驗收段 → 全過才前移標記。
+- 退出碼：0 完成且驗收過｜5 上次 /fi 後沒有新內容（一句帶過）｜2 找不到 transcript｜3 PII scrub（:4102）不通或 pipeline 的 LLM 失敗｜4 deep-lint 或 `fixindex fi` 失敗｜1 驗收失敗。
+- rc=3 且訊息是 scrub → 先看 `launchctl list | grep pii-gateway` 與 :4102，修好再跑；**不准**繞過 scrub 把逐字稿交給外部 LLM（鐵則 6）。
+- 「## 新增」下是「- 無」→ 一句「本 session 無新的可記經驗」帶過。
+- 要重掃整個 session：前面加 `FI_FULL=1`。
+- pipeline 連續失敗時才退回舊流程：`FI_MODE=agent bash ~/dev/fixindex/tools/fi-deep.sh <jsonl>`，照最後一行裸名 `deep-run`（背景），收件跑 `wo-verify <工單>`。
 
-   - 同 cwd 有並行 session 時，帶本 session 的 jsonl 路徑（檔名＝session id），不靠最新 mtime。
-   - 退出碼：0 已產工單｜2 找不到 transcript｜3 PII scrub（:4102）不通，fail-closed，不留任何產物｜4 deep-lint FAIL。
-   - rc=3 → 先看 `launchctl list | grep pii-gateway` 與 :4102，修好再跑；**不准**繞過 scrub 直接把逐字稿交給 deep（deep 是外部 LLM，鐵則 6）。
-2. **派 deep**：照抄腳本最後一行 `deep-run <工單> <cwd>`，裸名、單一指令、`run_in_background: true`。
-3. **收件**：
-   - `wo-verify <工單>` 自己重跑，rc=0 才算完成；deep 的 `VERIFY_FAIL` 照 deep skill 收件規則查。
-   - 讀報告（腳本印的 `report:` 路徑），轉述新增（編號＋核心）、補充、略過與 `fixindex status` 結果。
-   - 新增條目抽一兩條 `fixindex show <編號>` 看欄位是不是可搜尋關鍵字、RULE 是否可泛化；不合格就寫補單再派 deep，不自己改條目。
-4. **候選為空**：報告「## 新增」下是「- 無」→ 一句「本 session 無新的可記經驗」帶過。
-
-工單預設（`FI_MODE=pipeline`）只叫 deep 跑 `tools/fi_pipeline.py`：一次 LLM 抽候選 → 機械過濾（引用、RULE）→ 一次批次查重 → 一次 LLM 裁決（含同輪去重）→ 逐條寫入 → 報告。LLM 兩段走 ds-claude 的 `ds-run.sh --ask`，prompt 在 `tools/fi-prompts/`。pipeline 失敗時改跑 `FI_MODE=agent bash ~/dev/fixindex/tools/fi-deep.sh` 產舊版逐條工單。改流程就改腳本、prompt 與 `tools/fi-deep-test.sh`／`tools/fi-pipeline-test.sh`，不在這裡另寫一份。
+LLM 兩段走 ds-claude 的 `ds-run.sh --ask`，prompt 在 `tools/fi-prompts/`。改流程就改腳本、prompt 與 `tools/fi-deep-test.sh`／`tools/fi-pipeline-test.sh`，不在這裡另寫一份。
 
 ## 欄位（工單已附，供核對）
 
