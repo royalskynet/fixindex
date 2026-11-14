@@ -20,6 +20,8 @@ w, flag, q = sys.argv[1], sys.argv[2], sys.argv[3]
 assert flag == '--ask'
 log = os.environ['FAKE_LOG']
 open(log, 'a').write(('extract' if 'STAGE=extract' in q else 'adjudicate' if 'STAGE=adjudicate' in q else 'other') + '\n')
+if 'STAGE=extract' in q and os.environ.get('FAKE_SLEEP'):
+    import time; time.sleep(float(os.environ['FAKE_SLEEP']))
 if os.environ.get('FAKE_ASK_FAIL'):
     print('FAIL worker'); sys.exit(4)
 os.makedirs(os.path.join(w, 'task'), exist_ok=True)
@@ -38,6 +40,8 @@ if 'STAGE=extract' in q:
         'fields': {'CONTEXT': '原文：' + Q3, 'INSIGHT': 'i', 'IMPLICATION': 'm', 'QUERIES': 'q', 'RULE': 'rule C3'}}, ensure_ascii=False) + '\n')
     out.write('{not json\n')
     out.write(sym('C4 proxy 被當洩漏', 'proxy 洩漏', Q4) + '\n')
+    for n in range(int(os.environ.get('FAKE_MANY') or 0)):
+        out.write(sym('M%d 多條' % n, 'proxy 多條 %d' % n, Q0) + '\n')
 elif 'STAGE=adjudicate' in q:
     inp = os.path.join(w, 'adjudicate.json')
     assert 'adjudicate.json' in q, 'adjudicate question must name the input file'
@@ -96,8 +100,8 @@ chk "find 只跑一次" "$(grep -c '^fixindex find ' "$C/log")" "1"
 chk "insights 只跑一次" "$(grep -c '^fixindex insights ' "$C/log")" "1"
 chk "find 用 --queries-file --json" "$(grep '^fixindex find ' "$C/log" | grep -q -- '--queries-file' && grep '^fixindex find ' "$C/log" | grep -q -- '--json' && echo y)" "y"
 chk "queries.txt 只含通過過濾的 3 條" "$(grep -c . "$C/W/queries.txt" 2>/dev/null)" "3"
-chk "裁決輸入只含 i=0,3,4" "$(python3 -c 'import json,sys; print(sorted(c["i"] for c in json.load(open(sys.argv[1]))))' "$C/W/seen-adjudicate.json" 2>/dev/null)" "[0, 3, 4]"
-chk "查重結果附在候選上" "$(python3 -c 'import json,sys; d={c["i"]:c for c in json.load(open(sys.argv[1]))}; print(d[0]["hits"][0]["key"])' "$C/W/seen-adjudicate.json" 2>/dev/null)" "0555#1"
+chk "裁決輸入只含 i=0,3,4" "$(python3 -c 'import json,sys; print(sorted(c["i"] for c in json.load(open(sys.argv[1]))))' "$C/W/ask.adjudicate/seen-adjudicate.json" 2>/dev/null)" "[0, 3, 4]"
+chk "查重結果附在候選上" "$(python3 -c 'import json,sys; d={c["i"]:c for c in json.load(open(sys.argv[1]))}; print(d[0]["hits"][0]["key"])' "$C/W/ask.adjudicate/seen-adjudicate.json" 2>/dev/null)" "0555#1"
 chk "fixindex fi 呼叫 2 次" "$(ls "$C/d"/fi-in-* 2>/dev/null | wc -l | tr -d ' ')" "2"
 chk "第 1 筆是 C0" "$(grep -q 'C0' "$C/d/fi-in-1" 2>/dev/null && echo y)" "y"
 chk "C0 的 SYMPTOM 補上原文引用" "$(grep '^SYMPTOM:' "$C/d/fi-in-1" 2>/dev/null | grep -qF "原文：$Q0" && echo y)" "y"
@@ -141,5 +145,31 @@ chk "成功後前移標記" "$(cat "$C/state/sid" 2>/dev/null)" "42"
 C="$T/c5"; setup "$C"; printf '%s\t42\n' "$C/state/sid" > "$C/W/mark"
 runp "$C" FAKE_ASK_FAIL=1 || true
 chk "失敗不前移標記" "$([ -e "$C/state/sid" ] && echo y)" ""
+
+# 6. 各塊平行抽：3 塊各睡 2 秒，總耗時要小於依序的 6 秒
+C="$T/c6"; setup "$C"; printf '%s\n' "x" > "$C/W/part.02.txt"; printf '%s\n' "y" > "$C/W/part.03.txt"
+s=$(date +%s); runp "$C" FAKE_SLEEP=2 || true
+chk "三塊平行抽 <5s" "$([ $(( $(date +%s) - s )) -lt 5 ] && echo y)" "y"
+
+# 7. 超過時限：rc=6，不寫入、不前移標記
+C="$T/c7"; setup "$C"; printf '%s\t42\n' "$C/state/sid" > "$C/W/mark"
+if runp "$C" FI_DEADLINE_AT=1; then rc=0; else rc=$?; fi
+chk "超時 rc=6" "$rc" "6"
+chk "超時不寫入" "$(grep -cx 'fixindex fi' "$C/log")" "0"
+chk "未超時才寫入（對照）" "$([ "$(grep -cx 'fixindex fi' "$T/c1/log")" -gt 0 ] && echo y)" "y"
+chk "超時不前移標記" "$([ -e "$C/state/sid" ] && echo y)" ""
+
+# 8. LLM 段來得及、寫入前剩不到 10 秒：停止寫入、rc=6、不前移標記
+C="$T/c8"; setup "$C"; printf '%s\t42\n' "$C/state/sid" > "$C/W/mark"
+if runp "$C" FI_DEADLINE_AT=$(( $(date +%s) + 5 )) FI_RESERVE=-60; then rc=0; else rc=$?; fi
+chk "寫入前時限不足 rc=6" "$rc" "6"
+chk "寫入前時限不足不寫" "$(grep -cx 'fixindex fi' "$C/log")" "0"
+chk "寫入前時限不足不前移標記" "$([ -e "$C/state/sid" ] && echo y)" ""
+
+# 9. queries 多（3＋6 條）：find 分 3 組平行，查重結果仍附回每個候選
+C="$T/c9"; setup "$C"
+runp "$C" FAKE_MANY=6 || true
+chk "find 分組" "$(grep -c '^fixindex find ' "$C/log")" "3"
+chk "分組後 hits 合回" "$(python3 -c 'import json,sys; print(sum(1 for c in json.load(open(sys.argv[1])) if c["hits"]))' "$C/W/ask.adjudicate/seen-adjudicate.json" 2>/dev/null)" "8"
 
 exit $fail

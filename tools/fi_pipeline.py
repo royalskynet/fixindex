@@ -4,16 +4,19 @@
 用法：fi_pipeline.py <W>
 W 是 fi-deep.sh 的工作目錄，內有 part.*.txt。只用 Python 標準函式庫。
 
-退出碼：0 成功｜2 用法錯誤｜3 抽候選或裁決失敗（不寫任何條目）｜4 fixindex fi 失敗
+退出碼：0 成功｜2 用法錯誤｜3 抽候選或裁決失敗（不寫任何條目）｜4 fixindex fi 失敗｜6 超過 FI_DEADLINE_AT（不寫任何條目）
 """
 import glob
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 
-DEFAULT_ASK = 'bash ' + os.path.expanduser('~/.claude/skills/ds-claude/scripts/ds-run.sh')
+DEFAULT_ASK = 'bash ' + os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fi-ask.sh')
 
 
 def eprint(*args):
@@ -79,17 +82,25 @@ def main():
     w = sys.argv[1]
     here = os.path.dirname(os.path.abspath(__file__))
     prompts = os.path.join(here, 'fi-prompts')
-    notes_path = os.path.join(w, 'task', 'notes.md')
-    os.makedirs(os.path.join(w, 'task'), exist_ok=True)
+    deadline = float(os.environ.get('FI_DEADLINE_AT') or 0)
+    # LLM 段提早收手，留時間給寫入（每條約 8 秒，含 pull／push）與 fi-run 的驗收
+    llm_deadline = deadline - float(os.environ.get('FI_RESERVE') or 15) if deadline else 0
+    if llm_deadline:
+        os.environ['FI_DEADLINE_AT'] = str(int(llm_deadline))  # fi-ask 照這個收手
 
-    def ask(question):
-        try:
-            os.remove(notes_path)
-        except FileNotFoundError:
-            pass
-        proc = run_ask(w, question)
+    def late():
+        return llm_deadline and time.time() >= llm_deadline
+
+    def ask(name, src, question):
+        # 每次呼叫一個子目錄、只放要讀的那個檔：可平行，且 fi-ask 把子目錄頂層檔全附進訊息
+        d = os.path.join(w, 'ask.' + name)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(os.path.join(d, 'task'))
+        shutil.copy(src, d)
+        notes_path = os.path.join(d, 'task', 'notes.md')
+        proc = run_ask(d, question)
         if proc.returncode != 0:
-            eprint('fi_pipeline: LLM 指令失敗（exit %d）' % proc.returncode)
+            eprint('fi_pipeline: LLM 指令失敗（%s，exit %d）' % (name, proc.returncode))
             detail = ((proc.stdout or '') + (proc.stderr or '')).strip()
             if detail:
                 eprint(detail)
@@ -115,9 +126,16 @@ def main():
     with open(os.path.join(prompts, 'extract.md'), encoding='utf-8') as fh:
         extract_template = fh.read()
     candidates = []
-    for path in part_paths:
-        # 相對 W 的路徑：opencode 對 W 外的絕對路徑會 auto-reject（external_directory）
-        text = ask(extract_template.replace('{PART}', os.path.basename(path)))
+    # 各塊平行抽；結果照塊序收，候選編號穩定
+    with ThreadPoolExecutor(max_workers=max(1, len(part_paths))) as pool:
+        answers = list(pool.map(
+            lambda p: ask('extract.' + os.path.basename(p), p,
+                          extract_template.replace('{PART}', os.path.basename(p))),
+            part_paths))
+    if late():
+        eprint('fi_pipeline: 抽候選超過時限')
+        return 6
+    for text in answers:
         if text is None:
             return 3
         for line in text.splitlines():
@@ -157,6 +175,7 @@ def main():
     created = []
     appended = []
     failed = False
+    timed_out = False
 
     if passed:
         # 3. 批次查重
@@ -170,14 +189,29 @@ def main():
         with open(queries_path, 'w', encoding='utf-8') as fh:
             fh.write('\n'.join(queries) + '\n')
 
-        find_proc = run_fixindex(['find', '--queries-file', queries_path, '--json', '--limit', '5'])
-        if find_proc.returncode != 0:
-            eprint('fi_pipeline: fixindex find 失敗')
-            eprint((find_proc.stdout or '') + (find_proc.stderr or ''))
-            return 3
-        find_hits = parse_hits(find_proc.stdout)
+        # find 每支程序光載入索引約 5 秒、每條 query 再約 1 秒：超過 4 條就切成最多 4 組平行跑，和 insights 同時
+        size = max(3, -(-len(queries) // 4))
+        groups = [queries[k:k + size] for k in range(0, len(queries), size)]
+        group_paths = []
+        for n, group in enumerate(groups):
+            path = queries_path if len(groups) == 1 else os.path.join(w, 'queries.%d.txt' % n)
+            if len(groups) > 1:
+                with open(path, 'w', encoding='utf-8') as fh:
+                    fh.write('\n'.join(group) + '\n')
+            group_paths.append(path)
+        with ThreadPoolExecutor(max_workers=len(group_paths) + 1) as pool:
+            ins_f = pool.submit(run_fixindex, ['insights', '--queries-file', queries_path, '--json', '--limit', '5'])
+            find_fs = [pool.submit(run_fixindex, ['find', '--queries-file', p, '--json', '--limit', '5'])
+                       for p in group_paths]
+            find_procs, ins_proc = [f.result() for f in find_fs], ins_f.result()
+        find_hits = {}
+        for find_proc in find_procs:
+            if find_proc.returncode != 0:
+                eprint('fi_pipeline: fixindex find 失敗')
+                eprint((find_proc.stdout or '') + (find_proc.stderr or ''))
+                return 3
+            find_hits.update(parse_hits(find_proc.stdout))
 
-        ins_proc = run_fixindex(['insights', '--queries-file', queries_path, '--json', '--limit', '5'])
         if ins_proc.returncode != 0:
             eprint('fi_pipeline: fixindex insights 失敗')
             eprint((ins_proc.stdout or '') + (ins_proc.stderr or ''))
@@ -203,11 +237,13 @@ def main():
         with open(adjudicate_path, 'w', encoding='utf-8') as fh:
             json.dump(payload, fh, ensure_ascii=False)
         with open(os.path.join(prompts, 'adjudicate.md'), encoding='utf-8') as fh:
-            # 相對 W 的路徑：opencode 對 W 外的絕對路徑會 auto-reject（external_directory）
             adjudicate_question = fh.read().replace('{INPUT}', 'adjudicate.json')
-        answer = ask(adjudicate_question)
+        answer = ask('adjudicate', adjudicate_path, adjudicate_question)
         if answer is None:
-            return 3
+            return 6 if late() else 3
+        if late():
+            eprint('fi_pipeline: 裁決超過時限，不寫入')
+            return 6
 
         decisions = {}
         for line in answer.splitlines():
@@ -243,6 +279,11 @@ def main():
 
         # 5. 寫入
         for i, cand, fields in sorted(writes, key=lambda item: item[0]):
+            if deadline and time.time() + 10 > deadline:
+                # 已寫的保留；標記不前移，下次 /fi 重抽時查重會認出已寫的
+                eprint('fi_pipeline: 寫入前剩不到 10 秒，停止寫入')
+                timed_out = True
+                break
             core = as_value(cand.get('core'))
             quote = as_value(cand.get('quote'))
             fields = dict(fields)
@@ -314,10 +355,10 @@ def main():
     with open(report_path, 'w', encoding='utf-8') as fh:
         fh.write(body)
 
-    if not failed:
+    if not failed and not timed_out:
         commit_mark(w)
     print(report_path)
-    return 4 if failed else 0
+    return 4 if failed else 6 if timed_out else 0
 
 
 def commit_mark(w):
