@@ -11,7 +11,7 @@ description: 回顧當次 session，挖出值得增補 fixindex 的 insights（�
 
 ## 程序（主 session 就地回顧；不派 deep、不派子代理、不交外部 LLM 重讀逐字稿）
 
-設計借鏡 claude-reflect-system：零 LLM 正則抓訊號，主 session 用自己手上的上下文判斷。目標 30–60 秒。
+設計借鏡 claude-reflect-system：零 LLM 正則抓訊號，主 session 用自己手上的上下文判斷。**整個流程 30 秒內收完**：主 session 就地跑，不派 od／dcq／deep（11-15 派 od 排隊加重試耗掉 8 分鐘以上）；寫入只呼叫一次。
 
 1. **抓訊號**（約 0.1 秒）：
    ```bash
@@ -21,7 +21,7 @@ description: 回顧當次 session，挖出值得增補 fixindex 的 insights（�
 2. **挑候選**：只留會重複撞到、下次搜得到的。一次性手誤、護欄照設計擋下、已在本 session 規則裡的不收。
 3. **查重一次**：候選的關鍵字寫進一個檔（一行一個），跑
    `fixindex find --queries-file <檔> --json --limit 3` 與 `fixindex insights --queries-file <檔> --json --limit 3`（同一則訊息平行）。已存在且沒新東西的略過。
-4. **寫入**：每條一次 `printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …\nRULE: …\n' | fixindex fi`（insight 用 `CONTEXT／INSIGHT／IMPLICATION／QUERIES／RULE`）。`fixindex fi` 自己查重：相近的追加到既有條目，沒有才建新條目。
+4. **寫入**：所有條目一次 pipe 給 `fixindex fi`，每筆之間一行 `%%`（例：`printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …\nRULE: …\n%%%%\nCONTEXT: …\nINSIGHT: …\nIMPLICATION: …\nQUERIES: …\nRULE: …\n' | fixindex fi`）。批次只 pull／commit／push 各一次，每筆約 2–3 秒；逐筆呼叫每筆約 10 秒。驗收看最後一行 JSON 的 `"pushed": true`，不用 `fixindex find --json` 找正文字串（它只回標題與規則，不含正文）。`fixindex fi` 自己查重：相近的追加到既有條目，沒有才建新條目。
 5. **收尾**：`fixindex status --json --assert-clean` 過了，再跑 `python3 ~/dev/fixindex/tools/fi-signals.py --ack <jsonl>` 前移標記。
 6. **回報**：新增（編號＋核心）、補充、略過各一行；沒有就「本 session 無新的可記經驗」。
 

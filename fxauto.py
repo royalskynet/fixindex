@@ -937,12 +937,20 @@ def _compress():
         pass   # ponytail: 壓縮是加分項，不是寫入前提
 
 
+# 批次分隔行：一行只有 %%。批次中 _DEFERRED 收集各筆路徑，main 最後一次 commit/push。
+BATCH_SEP = re.compile(r'^%%[ \t]*$', re.M)
+_DEFERRED = None
+
+
 def _git_commit_push(paths):
     """Thin wrapper over fxsync.push — 維持 fxauto 既有 JSON 契約。
 
     committed=<short hash>|None, pushed=bool, git_error=<str>|None。
     git_error 只在 kind ∈ (conflict, fatal) 填（離線不 die：另給 pending_push=True，
     caller 的 git_error 檢查因此不 exit 1）。所有 git 由 fxsync 統一執行。"""
+    if _DEFERRED is not None:
+        _DEFERRED.extend(paths or [])
+        return {'committed': None, 'pushed': False, 'git_error': None, 'deferred': True}
     renames = {}
     res = fxsync.push(FIXINDEX_DIR, paths=paths,
                       after_rebase=lambda ps: resolve_id_collision(ps, renames))
@@ -1451,6 +1459,32 @@ def main():
     if plerr:
         print(json.dumps({'git_error': plerr, 'committed': None, 'pushed': False}))
         sys.exit(1)
+    stdin_text = sys.stdin.read() if not sys.stdin.isatty() else ''
+    chunks = [c for c in BATCH_SEP.split(stdin_text) if c.strip()]
+    if len(chunks) <= 1:
+        return _main_one(args, stdin_text)
+    # 批次（/fi 30 秒內收完）：逐筆寫，pull／commit／push 各只做一次。每筆約 10 秒，
+    # 其中 pull+push 走網路佔一半，4 筆逐次呼叫要 40 秒以上。
+    global _DEFERRED
+    _DEFERRED = []
+    rc = 0
+    for c in chunks:
+        try:
+            _main_one(args, c)
+        except SystemExit as e:
+            rc = max(rc, e.code if isinstance(e.code, int) else 1)
+    paths = list(dict.fromkeys(_DEFERRED))
+    _DEFERRED = None
+    out = {'batch': len(chunks), 'committed': None, 'pushed': False, 'git_error': None}
+    if '--commit' in args and paths:
+        out.update(_git_commit_push(paths))
+        if out.get('git_error'):
+            rc = max(rc, 1)
+    print(json.dumps(out, ensure_ascii=False))
+    sys.exit(rc)
+
+
+def _main_one(args, stdin_text):
     mode = None
     title_override = None
     symptom_arg = None
@@ -1489,7 +1523,6 @@ def main():
     #   - 非 KEY 行整段保留 → §5 詳情（實測數據/無效嘗試落點）
     detail_lines = []
     insight_fields = {}
-    stdin_text = sys.stdin.read() if not sys.stdin.isatty() else ''
     # SLUG: 歸屬它所在的段落（10138：混合 pipe 只有一行 SLUG，defect 與 insight
     # 兩筆共用同一 slug）。insight 鍵出現前的 SLUG 歸 defect，之後歸 insight；
     # 單一型 pipe 在分流時再把另一段的 SLUG 接過來。
@@ -1540,7 +1573,7 @@ def main():
     detail = '\n'.join(detail_lines)
     if n_symptom > 1 or n_defect_slug > 1 or n_insight_slug > 1:
         print(f'MULTI-ENTRY rejected: stdin 有 {n_symptom} 個 SYMPTOM／{n_defect_slug + n_insight_slug} 個 SLUG。'
-              'fixindex fi 一次只寫一筆，多筆請拆檔逐筆呼叫（for f in blk*.txt; do fixindex fi < "$f"; done）。',
+              '多筆請在每筆之間放一行 %%，一次 pipe 批次寫入、只 commit/push 一次。',
               file=sys.stderr)
         sys.exit(2)
 
