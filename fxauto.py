@@ -415,6 +415,7 @@ def find_domain_file_auto(title, symps, etype='defect', slug=None):
     cand = list(dict.fromkeys(_word_tokens(title) + (_word_tokens(symps[0]) if symps else [])))
     if not cand:
         return None
+    cand_set = set(cand)
     files = sorted(_glob.glob(os.path.join(FIXINDEX_DIR, '[0-9]*.md')))
     g1, g2 = {}, {}
     for fp in files:
@@ -435,13 +436,17 @@ def find_domain_file_auto(title, symps, etype='defect', slug=None):
         # symptom 順帶一句「父 process 是 hermes gateway」就把整條吸進桶裡（0853，
         # 0001 已中兩次）。多詞 slug 不受影響，維持 title ∪ symptom。
         bare = '-' not in s
+        # ② 只靠一個詞撞上多詞 slug 的開頭＝證據太弱：12174 的「session」吸進
+        # 11415-session-stop-posttooluse-subagentstop、10139 的 server 吸進
+        # 0314-server-parser-syntax。多詞 slug 要至少兩個詞出現在候選詞裡才算。
+        slug_hits = sum(1 for w in s.split('-') if w in cand_set)
         for t in set(cand):
             if t == s and (not bare or t in title_toks):
                 g1[fp] = g1.get(fp, 0) + 1
             # 短 token（<5 字）不做 dash-prefix 匹配：單詞 slug 常是常見詞
             # （test/fix/git/note…），prefix 命中等同亂猜，污染既有條目
             # （2026-09-05 實例：probe「test probe」被 append 進 0611-test-harness-…）。
-            elif len(t) >= 5 and (s.startswith(t + '-') or t.startswith(s + '-')):
+            elif len(t) >= 5 and slug_hits >= 2 and (s.startswith(t + '-') or t.startswith(s + '-')):
                 g2[fp] = g2.get(fp, 0) + 1
     # ①直接用：取命中 token 最多者（多檔平手時取最多，仍屬 ① 明確匹配）
     if g1:

@@ -32,8 +32,8 @@ def test_explicit_slug_blocks_fuzzy_domain():
             assert f(t, s, 'llama-server-per-request-thinking-budget') is None
             # 明示 SLUG 等於既有領域桶 → 進那個桶
             assert f('任意標題', ['任意'], 'hermes') == '0001-hermes.md'
-            # 沒給 SLUG 時維持原行為（不在這裡改 dash-prefix 規則）
-            assert f(t, s) == '0314-server-parser-syntax.md'
+            # 沒給 SLUG 也不靠單一詞前綴猜：server 只撞上 slug 三個詞之一
+            assert f(t, s) is None
         finally:
             fxauto.FIXINDEX_DIR = old
 
