@@ -11,7 +11,7 @@ description: 回顧當次 session，挖出值得增補 fixindex 的 insights（�
 
 ## 程序（主 session 就地回顧；不派 deep、不派子代理、不交外部 LLM 重讀逐字稿）
 
-設計借鏡 claude-reflect-system：零 LLM 正則抓訊號，主 session 用自己手上的上下文判斷。**整個流程 30 秒內收完**：主 session 就地跑，不派 od／dcq／deep（11-15 派 od 排隊加重試耗掉 8 分鐘以上）；寫入只呼叫一次。
+設計借鏡 claude-reflect-system：零 LLM 正則抓訊號，主 session 用自己手上的上下文判斷。**整個流程 30 秒內收完**：主 session 就地跑，不派 od／dcq／deep（11-15 派 od 排隊加重試耗掉 8 分鐘以上）；工具呼叫共兩次（抓訊號、寫入＋收尾）。
 
 1. **抓訊號**（約 0.1 秒）：
    ```bash
@@ -19,11 +19,12 @@ description: 回顧當次 session，挖出值得增補 fixindex 的 insights（�
    ```
    印出上次 /fi 之後的 `ERR`（工具真的失敗＋觸發指令）與 `USER`（使用者糾正）。rc=5＝沒有新內容，一句帶過。訊號只是提示：主 session 記得的根因、設計決定也算，不限清單內。
 2. **挑候選**：只留會重複撞到、下次搜得到的。一次性手誤、護欄照設計擋下、已在本 session 規則裡的不收。
-3. **查重一次**：候選的關鍵字寫進一個檔（一行一個），跑
-   `fixindex find --queries-file <檔> --json --limit 3` 與 `fixindex insights --queries-file <檔> --json --limit 3`（同一則訊息平行）。已存在且沒新東西的略過。
-4. **寫入**：所有條目一次 pipe 給 `fixindex fi`，每筆之間一行 `%%`（例：`printf 'SYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …\nRULE: …\n%%%%\nCONTEXT: …\nINSIGHT: …\nIMPLICATION: …\nQUERIES: …\nRULE: …\n' | fixindex fi`）。批次只 pull／commit／push 各一次，每筆約 2–3 秒；逐筆呼叫每筆約 10 秒。驗收看最後一行 JSON 的 `"pushed": true`，不用 `fixindex find --json` 找正文字串（它只回標題與規則，不含正文）。`fixindex fi` 自己查重：相近的追加到既有條目，沒有才建新條目。
-5. **收尾**：`fixindex status --json --assert-clean` 過了，再跑 `python3 ~/dev/fixindex/tools/fi-signals.py --ack <jsonl>` 前移標記。
-6. **回報**：新增（編號＋核心）、補充、略過各一行；沒有就「本 session 無新的可記經驗」。
+3. **寫入＋收尾（一次 Bash）**：不先另外查重，`fixindex fi` 寫入時自己查重（相近的追加到既有條目，沒有才建新條目）。所有條目一次 pipe，每筆之間一行 `%%`，同一條指令接收尾。**每筆第一行帶 `SLUG: <英文-kebab>`**：沒帶時標題 token 會前綴命中無關舊檔（11-15 實測「session」把新 insight 追加進 11415-session-stop-…）；帶了只認同名檔，沒有就建新：
+   ```bash
+   printf 'SLUG: …\nSYMPTOM: …\nROOT: …\nFIX: …\nVERIFY: …\nRULE: …\n%%%%\nSLUG: …\nCONTEXT: …\nINSIGHT: …\nIMPLICATION: …\nQUERIES: …\nRULE: …\n' | fixindex fi && fixindex status --json --assert-clean && python3 ~/dev/fixindex/tools/fi-signals.py --ack <jsonl>
+   ```
+   批次只 pull／commit／push 各一次，每筆約 2–3 秒；逐筆呼叫每筆約 10 秒。驗收看 JSON 的 `"pushed": true`，不用 `fixindex find --json` 找正文字串（它只回標題與規則，不含正文）。
+4. **回報**：新增（編號＋核心）、補充（追加到哪條）、略過各一行；沒有就「本 session 無新的可記經驗」。
 
 ## 備援（fi-run，等同 claude-reflect 的 --scan-history）
 
