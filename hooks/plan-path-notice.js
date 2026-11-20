@@ -25,16 +25,22 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execFileSync, spawnSync } = require('child_process');
 
-const PLANS_DIR = path.join(process.env.HOME || '/Users/51mini', '.claude', 'plans');
-const GUARD_DIR = path.join(process.env.HOME || '/Users/51mini', '.claude', 'guard-state');
+// HOME 只來自環境（os.homedir() 先讀 process.env.HOME，讀不到才問系統）。
+// 不要退回寫死的機器路徑：本 hook 會跨機部署，硬編會讓別台機器讀寫到錯的家目錄
+// （fixindex#17；舊版三處預設都是 '/Users/51mini'）。
+const HOME = os.homedir();
+
+const PLANS_DIR = path.join(HOME, '.claude', 'plans');
+const GUARD_DIR = path.join(HOME, '.claude', 'guard-state');
 const TRANSCRIPT_TAIL_BYTES = 200 * 1024; // 只讀尾端 200KB，絕不整檔讀入（職能 2a／4 讀 transcript 用）
 
 // ── gate-config 集中設定（【R】）──
 // 啟動時讀 ~/.claude/hooks/gate-config.json；讀不到或壞掉 → 全部視為 deny
 // （回退到現有行為，fail-closed）。
-const CONFIG_PATH = path.join(process.env.HOME || '/Users/51mini', '.claude', 'hooks', 'gate-config.json');
+const CONFIG_PATH = path.join(HOME, '.claude', 'hooks', 'gate-config.json');
 function loadGateConfig() {
   try {
     const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -94,7 +100,7 @@ function flagPath(sessionId, suffix) {
 // 去重（2026-10-20）：fixindex-pretool.js 的 L1 查舊帳閘已啟動（本輪判定檢修）時，它會 deny 並附完整說明，
 // 這裡的「尚未查舊帳」提醒就是同一句話講第二次，讓開。路徑規則照 fixindex-pretool.js L1 閘（6h 過期同步）。
 function l1GateArmed(sessionId) {
-  const dir = process.env.ROUTER_DIR || path.join(process.env.HOME || '/Users/51mini', '.claude', 'context-router');
+  const dir = process.env.ROUTER_DIR || path.join(HOME, '.claude', 'context-router');
   try {
     const st = fs.statSync(path.join(dir, 'l1-gate', String(sessionId).replace(/[^\w-]/g, '_')));
     return Date.now() - st.mtimeMs <= 6 * 3600e3;
