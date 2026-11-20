@@ -560,6 +560,13 @@ find_domain_file() {
   # keyword → slug form for exact/prefix comparison (case-insensitive)
   local kslug
   kslug=$(printf '%s' "$kw" | tr '[:upper:]' '[:lower:]')
+  # 舊介面 `fi <domain>` 原本單詞打頭就 ② 命中多詞 slug（fi session 吸進
+  # 11415-session-stop-…），跟 fxauto 端 cafd9c6 的「多詞 slug 至少兩詞命中」不同步。
+  # 多詞 slug 要輸入裡的獨立詞至少撞上兩詞才算，單詞輸入一律 ② 不命中。
+  # 兩邊先轉小寫再比對（macOS 內建 bash 3.2 沒有 ${x,,}）。
+  local kspace=" ${kw//-/ } " klc
+  klc=$(printf '%s' "$kspace" | tr '[:upper:]' '[:lower:]')
+  local g2_hits=0
   for f in "$FIXDIR"/[0-9][0-9][0-9][0-9]*-*.md; do
     [[ -e "$f" ]] || continue
     local base id slug slug_lower
@@ -572,13 +579,21 @@ find_domain_file() {
     if [[ "$slug_lower" == "$kslug" ]]; then
       best_g1="$f"
     elif [[ "$slug_lower" == "$kslug-"* ]]; then
-      best_g2="$f"
+      local wd hits=0
+      for wd in ${slug_lower//-/ }; do
+        [[ -n "$wd" && "${klc%%" $wd "*}" != "$klc" ]] && hits=$((hits + 1))
+      done
+      if [[ $hits -ge 2 ]]; then
+        best_g2="$f"; g2_hits=$((g2_hits + 1))
+      fi
     fi
     # ③ substring 不在此計分——避免模糊誤配
   done
   # ①直接用；否則 ②直接用；只剩 ③ → 拒猜
   if [[ -n "$best_g1" ]]; then echo "$best_g1"; return; fi
-  if [[ -n "$best_g2" ]]; then echo "$best_g2"; return; fi
+  # ② 命中多檔＝證據不足，回空讓呼叫端建新檔（否則 `fi session` 會不定序吸進
+  # 任一個 session-* 桶，舊碼是「迴圈最後一個贏」）
+  if [[ $g2_hits -eq 1 ]]; then echo "$best_g2"; return; fi
   echo ""
 }
 
