@@ -54,5 +54,24 @@ case "$o" in *'"continue":true'*) chk "空 payload 輸出合法 JSON" 1 1 ;; *) 
 o="$(run_hook '{bad json')"; rc=$?
 chk "壞 JSON rc" "$rc" 0
 
+# 5. 只認環境的 HOME，不得退回去硬編 /Users/51mini（fixindex#17）
+#    假 HOME 的 plans/ 下放一份 plan（mtime 最新）；ExitPlanMode 不帶 planFilePath
+#    時會走 resolvePlanMd() 猜最近的 plan。若程式改讀硬編 /Users/51mini/.claude/plans，
+#    注入的就會是真機上那份，不是這裡這份 → 路徑不同就抓得到。
+#    ⚠ 路徑要先正規化：TMPDIR 尾端帶斜線時 $WORK 會是 `.../T//ppn.x`，而 node 端
+#    path.join 產出單斜線；不 normalize 的話字串永遠對不上（這裡踩過一次）。
+HOME2="$(cd "$WORK/home2" 2>/dev/null && pwd -P || { mkdir -p "$WORK/home2" && cd "$WORK/home2" && pwd -P; })"; export HOME2
+mkdir -p "$HOME2/.claude/plans"
+fakeplan="$HOME2/.claude/plans/zz-home-test-plan.md"; echo '# fake plan' > "$fakeplan"
+hp() { printf '{"session_id":"s9","transcript_path":"%s","cwd":"%s","tool_name":"ExitPlanMode","tool_input":{}}' "$tp" "$WORK"; }
+o="$(HOME="$HOME2" run_hook "$(hp)")"
+case "$o" in *"$fakeplan"*) chk "只認環境 HOME 的 plans" 1 1 ;; *) chk "只認環境 HOME 的 plans (輸出: $o)" 1 0 ;; esac
+
+#    同時鎖住「不得硬編」：HOME 未設定時，程式不得再退回 /Users/51mini。
+#    HOME 拿掉後 node 的 os.homedir() 會去問 passwd（真家目錄），所以這裡用
+#    「HOME 指到檔案」的手法不能驗；改驗原始碼層級：不得出現字面 '/Users/51mini'。
+if grep -q "HOME || '/Users/51mini'" "$HOOK"; then chk "不得硬編 /Users/51mini 當 HOME 預設" 1 0; else chk "不得硬編 /Users/51mini 當 HOME 預設" 1 1; fi
+unset HOME2
+
 [ "$fail" = 0 ] && echo "PASS plan-path-notice" || echo "FAIL plan-path-notice"
 exit "$fail"
