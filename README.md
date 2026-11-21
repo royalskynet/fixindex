@@ -11,13 +11,16 @@
 
 ## 快速安裝
 
-一行安裝：把 CLI symlink 進 `~/.local/bin`，並把 `commands/*.md`（`/fi` 斜線指令）link 進 Claude Code config 目錄。
+安裝程式會把 CLI symlink 進 `~/.local/bin`，並把 `commands/*.md`（`/fi` 斜線指令）link 進 Claude Code config 目錄。
 
 ```bash
-git clone https://github.com/royalskynet/fixindex.git && cd fixindex && ./install.sh
+git clone https://github.com/royalskynet/fixindex.git && cd fixindex
+python3 -m pip install -r requirements.txt && ./install.sh
 ```
 
 前置需求：`bash` 4+ 與 `ripgrep`（macOS 用 `brew install ripgrep`，其他平台用套件管理器）。`install.sh` 會把 `~/.local/bin` 加進 PATH 的提示印出來 —— 記得照做。
+
+請使用目前啟用的 Python 環境（也可先建立並啟用 `.venv`）。`install.sh` 會先檢查 Python／PyYAML，再建立連結，不會自行修改系統 Python 套件。
 
 ---
 
@@ -45,6 +48,7 @@ cd ~/src/fixindex
 ### 2. 安裝 CLI 與 `/fi` 斜線指令
 
 ```bash
+python3 -m pip install -r requirements.txt
 bash install.sh      # CLI → ~/.local/bin/fixindex；commands/*.md（/fi）→ ${CLAUDE_CONFIG_DIR:-~/.claude}/commands
 ```
 
@@ -388,9 +392,9 @@ fixindex auto \
 - `bash` 4+
 - `ripgrep`（`brew install ripgrep`）— `find`/`grep` 需要
 - `awk`、`find`（macOS/Linux 內建）
-- 語意工具（`fxsearch`/`fixmeta`/`fxauto`/`fxblurb`/`fxadjudicate`）需要 `python3`
+- Python 工具與寫入流程需要 `python3`；寫入時的 frontmatter 驗證另需 PyYAML（`requirements.txt`）
 
-CLI 本身不需要 Node 或 Python；只有語意/自動化工具需要 Python。
+CLI 本身是 shell，但部分命令會呼叫 Python。BM25 搜尋只用 Python 標準庫；混合語意層另需選配套件。Hook 測試另需 Node.js。
 
 ---
 
