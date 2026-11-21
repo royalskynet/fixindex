@@ -13,13 +13,16 @@ Why it exists:
 
 ## Quick install
 
-One line. It symlinks the CLI into `~/.local/bin` and links `commands/*.md` (the `/fi` slash command) into your Claude Code config dir:
+The installer symlinks the CLI into `~/.local/bin` and links `commands/*.md` (the `/fi` slash command) into your Claude Code config dir:
 
 ```bash
-git clone https://github.com/royalskynet/fixindex.git && cd fixindex && ./install.sh
+git clone https://github.com/royalskynet/fixindex.git && cd fixindex
+python3 -m pip install -r requirements.txt && ./install.sh
 ```
 
 Needs `bash` 4+ and `ripgrep` (`brew install ripgrep` on macOS, your distro's package manager elsewhere). `install.sh` prints the `PATH` line to add afterwards — apply that yourself.
+
+Use your active Python environment (or create and activate `.venv` first). `install.sh` checks Python/PyYAML before creating links; it does not modify system Python packages.
 
 ## Install step by step
 
@@ -29,6 +32,7 @@ git clone https://github.com/royalskynet/fixindex.git ~/src/fixindex
 cd ~/src/fixindex
 
 # 2. CLI -> ~/.local/bin/fixindex, commands/*.md (/fi) -> ${CLAUDE_CONFIG_DIR:-~/.claude}/commands
+python3 -m pip install -r requirements.txt
 bash install.sh
 
 # 2b. isolated Claude config (e.g. CLAUDE_CONFIG_DIR=~/.deepclaude/config)
@@ -66,9 +70,10 @@ Your fix files live in **your own private checkout**, not in this public repo, s
 ### Requirements
 
 `bash` 4+, `ripgrep` (`brew install ripgrep`), `awk`, `find`. macOS and Linux.
-No Node, no database, no daemon. Python 3 (stdlib only) backs the semantic tools; the CLI
-itself is pure shell. The optional hybrid semantic layer is the one thing that wants a pip
-install — see [Retrieval: two modes](#retrieval-two-modes).
+No database or daemon. Python 3 and PyYAML (`requirements.txt`) are required for write-time
+frontmatter validation and Python-backed commands; the CLI itself is shell. BM25 retrieval
+uses the Python stdlib, while the optional hybrid semantic layer needs extra packages —
+see [Retrieval: two modes](#retrieval-two-modes). Hook tests also require Node.js.
 
 ## Workflow
 

@@ -9,6 +9,12 @@ TARGET_DIR="${1:-$HOME/.local/bin}"
 REPO="$(cd "$(dirname "$0")" && pwd)"
 SRC="$REPO/fixindex"
 
+if ! python3 -c 'import yaml, xml.parsers.expat' >/dev/null 2>&1; then
+  echo "Missing Python dependencies: activate your Python environment, then run:" >&2
+  echo "  python3 -m pip install -r \"$REPO/requirements.txt\"" >&2
+  exit 1
+fi
+
 mkdir -p "$TARGET_DIR"
 ln -sf "$SRC" "$TARGET_DIR/fixindex"
 echo "Linked $TARGET_DIR/fixindex -> $SRC"

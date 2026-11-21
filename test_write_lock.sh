@@ -24,9 +24,10 @@ git add -A; git commit -qm init; git push -q -u origin store 2>/dev/null
 # 他處先推一個會跟 A 的 re-index 衝突的 FIX-INDEX.md 變更
 git clone -q "$t/remote.git" "$t/c" 2>/dev/null
 ( cd "$t/c"; git config user.email t@t; git config user.name t
-  sed -i '' 's/| 0001 |/| 0009 | remote |\n| 0001 |/' FIX-INDEX.md 2>/dev/null || true
+  sed 's/| 0001 |/| 0009 | remote |\
+| 0001 |/' FIX-INDEX.md > FIX-INDEX.tmp && mv FIX-INDEX.tmp FIX-INDEX.md
   printf '\n<!-- remote edit -->\n' >> FIX-INDEX.md
-  sed -i '' 's/seed/seed-remote/' FIX-INDEX.md
+  sed 's/seed/seed-remote/' FIX-INDEX.md > FIX-INDEX.tmp && mv FIX-INDEX.tmp FIX-INDEX.md
   git commit -qam remote )
 
 mkdir "$t/shim"
