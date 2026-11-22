@@ -84,6 +84,7 @@ def tokenize(text):
 
 # ── BM25 ──
 K1, B = 1.2, 0.75
+MIN_PREFIX_LEN = 3
 
 class BM25Engine:
     def __init__(self, docs):
@@ -106,11 +107,12 @@ class BM25Engine:
         s = 0.0
         tf = self.tfmaps[i]
         for t in qtoks:
-            if len(t) >= 3:
+            if len(t) >= MIN_PREFIX_LEN:
                 # prefix-fuzzy: query token may be a prefix of (or contain-segment
                 # of) a long camelCase doc token like kIOGPU vs
                 # kIOGPUCommandBufferCallbackErrorOutOfMemory. Count occ + small bonus.
-                occ = sum(1 for dk in tf if dk.startswith(t) or t.startswith(dk))
+                occ = sum(1 for dk in tf if len(dk) >= MIN_PREFIX_LEN
+                          and (dk.startswith(t) or t.startswith(dk)))
                 if occ:
                     f = min(occ, 3)
                     s += self.idf(t) * (f * (K1 + 1)) / (f + K1 * (1 - B + B * dl / max(self.avgdl, 1)))
@@ -137,8 +139,9 @@ class BM25Engine:
         num = 0.0
         for t in qt:
             hit = t in tf
-            if not hit and len(t) >= 3:
-                hit = any(dk.startswith(t) or t.startswith(dk) for dk in tf)
+            if not hit and len(t) >= MIN_PREFIX_LEN:
+                hit = any(len(dk) >= MIN_PREFIX_LEN
+                          and (dk.startswith(t) or t.startswith(dk)) for dk in tf)
             if not hit:
                 hit = any(syn in tf for syn in SYNONYMS.get(t, ()))
             if hit:
