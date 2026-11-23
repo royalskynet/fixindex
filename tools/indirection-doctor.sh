@@ -78,7 +78,7 @@ check_one() {
       if [ "$repo" = "global" ]; then
         out=$(git config --global --get core.hooksPath 2>/dev/null)
       else
-        out=$(git -C "$repo" config --get core.hooksPath 2>/dev/null)
+        out=$(git -C "$repo" config --local --get core.hooksPath 2>/dev/null)
       fi
       if [ -z "$out" ]; then
         actual_ok=1; note="core.hooksPath 未設定"
