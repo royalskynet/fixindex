@@ -28,7 +28,9 @@ os.makedirs(os.path.join(w, 'task'), exist_ok=True)
 out = open(os.path.join(w, 'task', 'notes.md'), 'w')
 Q0, Q3, Q4 = os.environ['Q0'], os.environ['Q3'], os.environ['Q4']
 if 'STAGE=extract' in q:
-    if os.environ.get('FAKE_NONE'):
+    part_files = [f for f in os.listdir(w) if f.startswith('part.')]
+    part_text = open(os.path.join(w, part_files[0]), encoding='utf-8').read() if part_files else ''
+    if os.environ.get('FAKE_NONE') or Q0 not in part_text:
         out.write('NONE\n'); sys.exit(0)
     sym = lambda core, qq, quote, rule=True: json.dumps({'kind': 'symptom', 'core': core, 'query': qq, 'quote': quote,
         'fields': dict({'SYMPTOM': core, 'ROOT': 'r', 'FIX': 'f', 'VERIFY': 'v'}, **({'RULE': 'rule ' + core} if rule else {}))}, ensure_ascii=False)
@@ -46,8 +48,13 @@ elif 'STAGE=adjudicate' in q:
     inp = os.path.join(w, 'adjudicate.json')
     assert 'adjudicate.json' in q, 'adjudicate question must name the input file'
     shutil.copy(inp, os.path.join(w, 'seen-adjudicate.json'))
-    out.write('```\n{"i":"0","action":"write"}\n{"i":1,"action":"write"}\n{"i":3,"action":"write"}\n'
-              '{"i":4,"action":"skip","reason":"同輪重複，併入 0"}\n```\n')
+    mode = os.environ.get('FAKE_ADJ_MISSING', '')
+    prior = open(log).read().count('adjudicate') if os.path.exists(log) else 0
+    omit4 = mode == 'always' or (mode == 'once' and prior <= 1)
+    rows = ['{"i":"0","action":"write"}', '{"i":1,"action":"write"}', '{"i":3,"action":"write"}']
+    if not omit4:
+        rows.append('{"i":4,"action":"skip","reason":"同輪重複，併入 0"}')
+    out.write('```\n' + '\n'.join(rows) + '\n```\n')
 PY
 chmod +x "$T/ask"
 
@@ -171,5 +178,21 @@ C="$T/c9"; setup "$C"
 runp "$C" FAKE_MANY=6 || true
 chk "find 分組" "$(grep -c '^fixindex find ' "$C/log")" "3"
 chk "分組後 hits 合回" "$(python3 -c 'import json,sys; print(sum(1 for c in json.load(open(sys.argv[1])) if c["hits"]))' "$C/W/ask.adjudicate/seen-adjudicate.json" 2>/dev/null)" "8"
+
+# 10. 裁決漏一個 id：重問一次後補齊，正常寫入
+C="$T/c10"; setup "$C"
+if runp "$C" FAKE_ADJ_MISSING=once; then rc=0; else rc=$?; fi
+chk "裁決漏 id 重問後 rc" "$rc" "0"
+chk "裁決漏 id 會重問" "$(grep -c '^adjudicate' "$C/log")" "2"
+chk "重問補齊後仍寫 2 筆" "$(ls "$C/d"/fi-in-* 2>/dev/null | wc -l | tr -d ' ')" "2"
+
+# 11. 裁決一直漏 id：fail-closed，不寫任何條件、不前移標記
+C="$T/c11"; setup "$C"; printf '%s	42
+' "$C/state/sid" > "$C/W/mark"
+if runp "$C" FAKE_ADJ_MISSING=always; then rc=0; else rc=$?; fi
+chk "裁決持續漏 id rc=3" "$rc" "3"
+chk "裁決持續漏 id 不寫 fixindex" "$(ls "$C/d"/fi-in-* 2>/dev/null | wc -l | tr -d ' ')" "0"
+chk "裁決持續漏 id 不前移標記" "$([ -e "$C/state/sid" ] && echo y)" ""
+chk "裁決持續漏 id stderr 明說" "$(grep -c '裁決仍漏候選 id' "$C/err")" "1"
 
 exit $fail

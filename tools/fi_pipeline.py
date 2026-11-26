@@ -245,21 +245,41 @@ def main():
             eprint('fi_pipeline: 裁決超過時限，不寫入')
             return 6
 
-        decisions = {}
-        for line in answer.splitlines():
-            s = line.strip()
-            if not s.startswith('{'):
-                continue
-            try:
-                obj = json.loads(s)
-            except Exception:
-                continue
-            if not isinstance(obj, dict) or 'i' not in obj or 'action' not in obj:
-                continue
-            try:
-                decisions[int(obj['i'])] = obj  # LLM 常把 i 寫成字串 "0"
-            except (TypeError, ValueError):
-                continue
+        def parse_decisions(text):
+            parsed = {}
+            for line in (text or '').splitlines():
+                s = line.strip()
+                if not s.startswith('{'):
+                    continue
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict) or 'i' not in obj or 'action' not in obj:
+                    continue
+                try:
+                    parsed[int(obj['i'])] = obj  # LLM 常把 i 寫成字串 "0"
+                except (TypeError, ValueError):
+                    continue
+            return parsed
+
+        decisions = parse_decisions(answer)
+        expected_ids = [cand['i'] for cand in passed]
+        missing = [i for i in expected_ids if i not in decisions]
+        if missing:
+            retry_question = adjudicate_question + (
+                '\n你上次輸出漏了候選 i：%s。這次必須對輸入陣列裡每個 i 各輸出一行 JSON；'
+                '少任何一個 i 都視為裁決失敗。' % ','.join(map(str, missing))
+            )
+            retry = ask('adjudicate-retry', adjudicate_path, retry_question)
+            if retry is None:
+                eprint('fi_pipeline: 裁決漏 id，重問失敗')
+                return 6 if late() else 3
+            decisions = parse_decisions(retry)
+            missing = [i for i in expected_ids if i not in decisions]
+        if missing:
+            eprint('fi_pipeline: 裁決仍漏候選 id：%s；fail-closed 不寫入' % ','.join(map(str, missing)))
+            return 3
 
         writes = []
         for cand in passed:
